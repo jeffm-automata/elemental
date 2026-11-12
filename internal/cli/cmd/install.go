@@ -37,6 +37,7 @@ type InstallFlags struct {
 	Local                bool
 	CryptoPolicy         string
 	Snapshotter          string
+	ExistingPartitions   bool
 }
 
 var InstallArgs InstallFlags
@@ -114,6 +115,12 @@ func NewInstallCommand(appName string, action func(context.Context, *cli.Command
 				Usage:       "Snapshotter [snapper, overwrite]",
 				Value:       "snapper",
 				Destination: &InstallArgs.Snapshotter,
+			},
+			&cli.BoolFlag{
+				Name: "existing-partitions",
+				Usage: "PROTOTYPE: install into partitions that already exist on the target disk " +
+					"(identified by 'uuid' in the description file) without wiping or repartitioning it",
+				Destination: &InstallArgs.ExistingPartitions,
 			},
 		},
 	}

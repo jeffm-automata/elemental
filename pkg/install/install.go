@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/suse/elemental/v3/pkg/block"
@@ -45,6 +46,22 @@ type Installer struct {
 	u          upgrade.Interface
 	unpackOpts []unpack.Opt
 	b          bootloader.Bootloader
+	// existingParts makes Install use partitions that already exist on the target
+	// disks instead of wiping and repartitioning them. PROTOTYPE (T6.4).
+	existingParts bool
+}
+
+// WithExistingPartitions makes Install skip disk wiping and partitioning. Every partition
+// of the deployment must already exist on its target disk, be formatted with the expected
+// filesystem and label, be unmounted, and be identified by its partition UUID in the
+// deployment. Any other partition on the disk is left untouched and may be mounted.
+//
+// PROTOTYPE (T6.4, Harvester in-place migration): the partitions are not formatted here and
+// partition sizes and order are not checked against the deployment.
+func WithExistingPartitions() Option {
+	return func(i *Installer) {
+		i.existingParts = true
+	}
 }
 
 func WithUnpackOpts(opts ...unpack.Opt) Option {
@@ -110,15 +127,21 @@ func (i Installer) Install(d *deployment.Deployment) (err error) {
 	cleanup := cleanstack.NewCleanStack()
 	defer func() { err = cleanup.Cleanup(err) }()
 
-	err = i.checkTargetDisks(d)
+	if i.existingParts {
+		err = i.checkExistingPartitions(d)
+	} else {
+		err = i.checkTargetDisks(d)
+	}
 	if err != nil {
 		return err
 	}
 
 	for _, disk := range d.Disks {
-		err = repart.PartitionAndFormatDevice(i.s, disk)
-		if err != nil {
-			return fmt.Errorf("partitioning disk '%s': %w", disk.Device, err)
+		if !i.existingParts {
+			err = repart.PartitionAndFormatDevice(i.s, disk)
+			if err != nil {
+				return fmt.Errorf("partitioning disk '%s': %w", disk.Device, err)
+			}
 		}
 		for _, part := range disk.Partitions {
 			i.s.Logger().Debug("creating partition volumes: %+v", part.RWVolumes)
@@ -179,6 +202,48 @@ func (i Installer) checkTargetDisks(d *deployment.Deployment) error {
 			if part != nil && len(part.MountPoints) > 0 {
 				return fmt.Errorf("cannot install, target device (%s) has active mountpoints: %v", disk.Device, part.MountPoints)
 			}
+		}
+	}
+	return nil
+}
+
+// checkExistingPartitions verifies that each partition of the deployment is already present
+// on its target disk and is safe to install into: found by partition UUID, formatted with the
+// expected filesystem and label, and not mounted. Partitions of the disk that are not part of
+// the deployment are ignored.
+func (i Installer) checkExistingPartitions(d *deployment.Deployment) error {
+	bDev := lsblk.NewLsDevice(i.s)
+	for _, disk := range d.Disks {
+		parts, err := bDev.GetDevicePartitions(disk.Device)
+		if err != nil {
+			return fmt.Errorf("failed to list target device partitions: %w", err)
+		}
+		for _, part := range disk.Partitions {
+			if part.UUID == "" {
+				return fmt.Errorf("cannot install to existing partitions, %s partition has no UUID in deployment", part.Role)
+			}
+			bPart := parts.GetByUUID(part.UUID)
+			if bPart == nil {
+				return fmt.Errorf("cannot install to existing partitions, %s partition '%s' not found in '%s'", part.Role, part.UUID, disk.Device)
+			}
+			// lsblk reports '[null]' for unmounted devices, which is parsed as a single empty string
+			mnts := slices.DeleteFunc(slices.Clone(bPart.MountPoints), func(m string) bool { return m == "" })
+			if len(mnts) > 0 {
+				return fmt.Errorf("cannot install, target partition (%s) has active mountpoints: %v", bPart.Path, mnts)
+			}
+			if bPart.FileSystem != part.FileSystem.String() {
+				return fmt.Errorf(
+					"cannot install, target partition (%s) is formatted as '%s', expected '%s'",
+					bPart.Path, bPart.FileSystem, part.FileSystem,
+				)
+			}
+			if part.Label != "" && bPart.Label != part.Label {
+				return fmt.Errorf(
+					"cannot install, target partition (%s) has filesystem label '%s', expected '%s'",
+					bPart.Path, bPart.Label, part.Label,
+				)
+			}
+			i.s.Logger().Info("Using existing partition %s as %s partition", bPart.Path, part.Role)
 		}
 	}
 	return nil

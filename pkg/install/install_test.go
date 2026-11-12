@@ -213,6 +213,67 @@ var _ = Describe("Install", Label("install"), func() {
 			{"mksquashfs"},
 		}))
 	})
+	Describe("into existing partitions", func() {
+		const existingLsblkJson = `{
+			"blockdevices": [
+			   {"label": "COS_STATE", "partlabel": "state", "partuuid": "11111111-7b04-4fc4-8639-8c49eb7277d5",
+				"size": 272629760, "fstype": "ext4", "mountpoints": ["/run/initramfs/cos-state"],
+				"path": "/dev/device1", "pkname": "/dev/device", "type": "part"},
+			   {"label": "EFI", "partlabel": "EFI", "partuuid": "c60d1845-7b04-4fc4-8639-8c49eb7277d5",
+				"size": 272629760, "fstype": "vfat", "mountpoints": [null],
+				"path": "/dev/device2", "pkname": "/dev/device", "type": "part"},
+			   {"label": "SYSTEM", "partlabel": "SYSTEM", "partuuid": "34a8abb8-ddb3-48a2-8ecc-2443e92c7510",
+				"size": 2726297600, "fstype": "%s", "mountpoints": [%s],
+				"path": "/dev/device3", "pkname": "/dev/device", "type": "part"}
+			]
+		}`
+		var sysFS, sysMnt string
+		BeforeEach(func() {
+			sysFS = "btrfs"
+			sysMnt = "null"
+			d.Disks[0].Partitions[0].UUID = "c60d1845-7b04-4fc4-8639-8c49eb7277d5"
+			d.Disks[0].Partitions[1].UUID = "34a8abb8-ddb3-48a2-8ecc-2443e92c7510"
+			i = install.New(context.Background(), s, install.WithUpgrader(upgrader), install.WithExistingPartitions())
+			sideEffects["lsblk"] = func(args ...string) ([]byte, error) {
+				return []byte(fmt.Sprintf(existingLsblkJson, sysFS, sysMnt)), runner.ReturnError
+			}
+			sideEffects["systemd-repart"] = func(args ...string) ([]byte, error) {
+				return nil, fmt.Errorf("systemd-repart must not be called")
+			}
+			sideEffects["blkdiscard"] = func(args ...string) ([]byte, error) {
+				return nil, fmt.Errorf("blkdiscard must not be called")
+			}
+		})
+		It("installs without partitioning even if other partitions of the disk are mounted", func() {
+			Expect(i.Install(d)).To(Succeed())
+			Expect(runner.MatchMilestones([][]string{
+				{"btrfs", "subvolume", "create"},
+				{"chattr", "+C"},
+			})).To(Succeed())
+			Expect(runner.IncludesCmds([][]string{{"systemd-repart"}})).NotTo(Succeed())
+			Expect(runner.IncludesCmds([][]string{{"blkdiscard"}})).NotTo(Succeed())
+		})
+		It("fails if a partition has no UUID in the deployment", func() {
+			d.Disks[0].Partitions[1].UUID = ""
+			Expect(i.Install(d)).To(MatchError(ContainSubstring("has no UUID in deployment")))
+		})
+		It("fails if a partition is not found on the target disk", func() {
+			d.Disks[0].Partitions[0].UUID = "00000000-7b04-4fc4-8639-8c49eb7277d5"
+			Expect(i.Install(d)).To(MatchError(ContainSubstring("not found in '/dev/device'")))
+		})
+		It("fails if a target partition is mounted", func() {
+			sysMnt = `"/some/root"`
+			Expect(i.Install(d)).To(MatchError(ContainSubstring("has active mountpoints")))
+		})
+		It("fails if a target partition has an unexpected filesystem", func() {
+			sysFS = "ext4"
+			Expect(i.Install(d)).To(MatchError(ContainSubstring("is formatted as 'ext4', expected 'btrfs'")))
+		})
+		It("fails if a target partition has an unexpected label", func() {
+			d.Disks[0].Partitions[1].Label = "OTHER"
+			Expect(i.Install(d)).To(MatchError(ContainSubstring("has filesystem label 'SYSTEM', expected 'OTHER'")))
+		})
+	})
 	It("resets the given deployment", func() {
 		deployment.WithRecoveryPartition(0)(d)
 		Expect(i.Reset(d)).To(Succeed())

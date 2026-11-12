@@ -104,11 +104,16 @@ func initInstaller(ctx context.Context, s *sys.System, d *deployment.Deployment,
 		upgrade.WithSnapshotter(snapshotter),
 		upgrade.WithUnpackOpts(unpackOpts...),
 	)
-	installer := install.New(
-		ctx, s, install.WithUpgrader(upgrader),
+	installOpts := []install.Option{
+		install.WithUpgrader(upgrader),
 		install.WithUnpackOpts(unpackOpts...),
 		install.WithBootloader(bootloader),
-	)
+	}
+	if args.ExistingPartitions {
+		s.Logger().Warn("Installing into existing partitions, target disks are not wiped nor repartitioned")
+		installOpts = append(installOpts, install.WithExistingPartitions())
+	}
+	installer := install.New(ctx, s, installOpts...)
 	return installer, nil
 }
 
