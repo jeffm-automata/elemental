@@ -65,6 +65,14 @@ type Installation struct {
 	RAW           RAW           `yaml:"raw"`
 	ISO           ISO           `yaml:"iso"`
 	CryptoPolicy  crypto.Policy `yaml:"cryptoPolicy" validate:"omitempty,oneof=fips default"`
+	CloudInit     CloudInit     `yaml:"cloudInit,omitempty"`
+}
+
+// CloudInit configures the cloud-init style configuration of the system at boot time.
+type CloudInit struct {
+	// Enabled includes the cloud-init services in the image. They apply the user-data found in
+	// a NoCloud or ConfigDrive volume and the yip documents stored in the system.
+	Enabled bool `yaml:"enabled"`
 }
 
 type RAW struct {
