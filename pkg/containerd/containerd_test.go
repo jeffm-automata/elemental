@@ -200,4 +200,57 @@ var _ = Describe("Containerd", Label("containerd", "rootlesskit"), func() {
 		_, err := ctrdWr.FindUnpackedImage(ctx, missingImgRef)
 		Expect(err).To(MatchError(ContainSubstring("getting image from containerd")))
 	})
+
+	It("mounts an image again after a run that could not remove its view", func() {
+		sock, err := tfs.RawPath(ctrdSock)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(PullImg(ctx, sock, alpineImageRef)).To(Succeed())
+		img, err := ctrdWr.FindUnpackedImage(ctx, alpineImageRef)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("leaving a view behind, the way an interrupted run does")
+		cli, err := client.New(sock)
+		Expect(err).NotTo(HaveOccurred())
+		for _, leftover := range []string{"extraction-view-" + img.ChainID, staleViewKey(img.ChainID)} {
+			_, err = cli.SnapshotService(img.Snapshotter).View(ctx, leftover, img.ChainID)
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		callback := func(rootfs string) error {
+			return vfs.CopyFile(tfs, filepath.Join(rootfs, "/etc/os-release"), "/run/containerd")
+		}
+		Expect(ctrdWr.RunOnMountedROSnapshot(ctx, img, callback)).To(Succeed())
+		Expect(ctrdWr.RunOnMountedROSnapshot(ctx, img, callback)).To(Succeed())
+		ok, _ := vfs.Exists(tfs, "/run/containerd/os-release")
+		Expect(ok).To(BeTrue())
+	})
+})
+
+// staleViewKey returns a view key as a previous run for the given chain ID would have used it.
+func staleViewKey(chainID string) string {
+	key, err := containerd.ViewKey(chainID)
+	Expect(err).NotTo(HaveOccurred())
+	return key
+}
+
+var _ = Describe("Snapshot view key", Label("containerd"), func() {
+	const chainID = "sha256:34986af1682e5ed539053a3e7974f36af7e03db70d28cd304ac8569818f0ce87"
+
+	It("names the image it is a view of", func() {
+		key, err := containerd.ViewKey(chainID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(key).To(HavePrefix("extraction-view-" + chainID + "-"))
+	})
+
+	It("is different for every run, also for the same image", func() {
+		keys := map[string]struct{}{}
+		for range 1000 {
+			key, err := containerd.ViewKey(chainID)
+			Expect(err).NotTo(HaveOccurred())
+			keys[key] = struct{}{}
+		}
+		Expect(keys).To(HaveLen(1000))
+		Expect(keys).NotTo(HaveKey("extraction-view-" + chainID))
+	})
 })
