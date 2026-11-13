@@ -32,6 +32,7 @@ import (
 	"github.com/suse/elemental/v3/internal/image"
 	"github.com/suse/elemental/v3/internal/image/kubernetes"
 	"github.com/suse/elemental/v3/internal/image/release"
+	"github.com/suse/elemental/v3/pkg/deployment"
 	"github.com/suse/elemental/v3/pkg/log"
 	"github.com/suse/elemental/v3/pkg/manifest/api"
 	"github.com/suse/elemental/v3/pkg/manifest/api/core"
@@ -296,6 +297,74 @@ passwd:
 		Expect(err).ToNot(HaveOccurred())
 		_, err = fs.Stat(filepath.Join(output.OverlaysDir(), image.ExtensionsPath(), "remote-foo-image"))
 		Expect(err).ToNot(HaveOccurred())
+	})
+
+	Describe("Release marker", func() {
+		const (
+			osImage  = "registry.example.com/base-os:16.1-76.43"
+			isoImage = "registry.example.com/base-os-iso:16.1-76.81"
+		)
+
+		configure := func(osComponent *core.OperatingSystem) {
+			rm := &resolver.ResolvedManifest{
+				CorePlatform: &core.ReleaseManifest{
+					Metadata: &core.Metadata{
+						Elemental: &core.Elemental{
+							Version: "3.0",
+						},
+					},
+					Components: core.Components{
+						OperatingSystem: osComponent,
+					},
+				},
+			}
+			m := NewManager(
+				system,
+				&helmConfiguratorMock{configureFunc: defaultHelmFunc},
+				WithManifestResolver(&resolverMock{resolveFunc: func(string) (*resolver.ResolvedManifest, error) {
+					return rm, nil
+				}}),
+			)
+			conf := &image.Configuration{
+				Release: release.Release{ManifestURI: "oci://registry.example.com/release-manifest:1.2.3"},
+			}
+
+			_, err := m.ConfigureComponents(context.Background(), conf, output)
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		It("Records the release manifest and its OS image in the overlay tree of the image", func() {
+			configure(&core.OperatingSystem{Image: core.Image{Base: osImage, ISO: isoImage}})
+
+			marker, err := deployment.ParseReleaseMarker(system, output.OverlaysDir())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(marker).ToNot(BeNil())
+			Expect(*marker).To(Equal(deployment.ReleaseMarker{
+				ReleaseManifest: "oci://registry.example.com/release-manifest:1.2.3",
+				OSImage:         osImage,
+				InstallerImage:  isoImage,
+			}))
+
+			By("Writing it where the installed system keeps its deployment file")
+			_, err = fs.Stat(filepath.Join(output.OverlaysDir(), "etc", "elemental", "release.yaml"))
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("Records nothing when the release manifest names no OS image", func() {
+			configure(&core.OperatingSystem{Image: core.Image{ISO: isoImage}})
+
+			marker, err := deployment.ParseReleaseMarker(system, output.OverlaysDir())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(marker).To(BeNil())
+		})
+
+		It("Records nothing when the release manifest has no operating system component", func() {
+			configure(nil)
+
+			marker, err := deployment.ParseReleaseMarker(system, output.OverlaysDir())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(marker).To(BeNil())
+		})
 	})
 
 	It("Fails to configure when elemental version in core platform is not supported", func() {

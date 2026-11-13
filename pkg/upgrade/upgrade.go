@@ -158,6 +158,14 @@ func (u Upgrader) Upgrade(d *deployment.Deployment) (err error) {
 		return fmt.Errorf("relabelling snapshot path '%s': %w", trans.Path, err)
 	}
 
+	// A release marker describes the snapshot of the installation only. Snapshotted volumes are merged into
+	// the new snapshot, so drop any marker inherited from the previous one. The overlay tree, which is applied
+	// later, brings the marker of an installation.
+	err = deployment.RemoveReleaseMarker(u.s, trans.Path)
+	if err != nil {
+		return fmt.Errorf("removing inherited release marker: %w", err)
+	}
+
 	err = d.WriteDeploymentFile(u.s, trans.Path)
 	if err != nil {
 		return fmt.Errorf("writing deployment file: %w", err)

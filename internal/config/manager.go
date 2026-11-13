@@ -26,6 +26,7 @@ import (
 	"github.com/suse/elemental/v3/internal/butane"
 	"github.com/suse/elemental/v3/internal/image"
 	"github.com/suse/elemental/v3/pkg/cache"
+	"github.com/suse/elemental/v3/pkg/deployment"
 	"github.com/suse/elemental/v3/pkg/extractor"
 	"github.com/suse/elemental/v3/pkg/hauler"
 	"github.com/suse/elemental/v3/pkg/http"
@@ -194,6 +195,10 @@ func (m *Manager) ConfigureComponents(ctx context.Context, conf *image.Configura
 		return nil, fmt.Errorf("core platform not supported with current elemental version: %w", err)
 	}
 
+	if err = m.writeReleaseMarker(conf, rm, output); err != nil {
+		return nil, fmt.Errorf("recording release: %w", err)
+	}
+
 	if err = m.configureNetworkOnFirstboot(conf, output); err != nil {
 		return nil, fmt.Errorf("configuring network: %w", err)
 	}
@@ -218,6 +223,29 @@ func (m *Manager) ConfigureComponents(ctx context.Context, conf *image.Configura
 	}
 
 	return rm, nil
+}
+
+// writeReleaseMarker records the release the image is customized from in the overlay tree
+// of the image, so that the installed system knows which OS image it runs. The deployment file
+// of a system installed from installer media only refers to the squashfs image of that media.
+func (m *Manager) writeReleaseMarker(conf *image.Configuration, rm *resolver.ResolvedManifest, output Output) error {
+	if rm.CorePlatform == nil || rm.CorePlatform.Components.OperatingSystem == nil {
+		return nil
+	}
+
+	osImage := rm.CorePlatform.Components.OperatingSystem.Image
+	if osImage.Base == "" {
+		m.system.Logger().Warn("Release manifest defines no OS base image, not recording the release in the image")
+		return nil
+	}
+
+	marker := deployment.ReleaseMarker{
+		ReleaseManifest: conf.Release.ManifestURI,
+		OSImage:         osImage.Base,
+		InstallerImage:  osImage.ISO,
+	}
+
+	return marker.Write(m.system, output.OverlaysDir())
 }
 
 func defaultManifestResolver(fs vfs.FS, out Output, local bool, c *cache.Cache, platform string) (res *resolver.Resolver, err error) {
