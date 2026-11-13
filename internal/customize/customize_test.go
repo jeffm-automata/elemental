@@ -323,6 +323,64 @@ disks:
 		}
 	})
 
+	It("adds read-write volumes from install.yaml to the SYSTEM partition", func() {
+		customizeRunner.FileExtractor = &fileExtractorMock{
+			extractFunc: func(uri string) (path string, err error) { return "", nil },
+		}
+		customizeDeployment := &deployment.Deployment{}
+		customizeRunner.Media = &mediaMock{
+			customizeFunc: func(d *deployment.Deployment) error {
+				customizeDeployment = d
+				return nil
+			},
+		}
+		sideEffects["truncate"] = func(args ...string) ([]byte, error) { return []byte{}, nil }
+
+		def := &image.Definition{
+			Image: image.Image{ImageType: "raw", OutputImageName: "customized.raw"},
+			Configuration: &image.Configuration{
+				Installation: install.Installation{
+					Bootloader: "grub",
+					RAW:        install.RAW{DiskSize: "35G"},
+					RWVolumes:  deployment.RWVolumes{{Path: "/oem"}},
+				},
+			},
+		}
+
+		Expect(customizeRunner.Run(context.Background(), def, output)).To(Succeed())
+		system := customizeDeployment.Disks[0].Partitions[3]
+		Expect(system.Label).To(Equal(deployment.SystemLabel))
+		var oem *deployment.RWVolume
+		for i := range system.RWVolumes {
+			if system.RWVolumes[i].Path == "/oem" {
+				oem = &system.RWVolumes[i]
+			}
+		}
+		Expect(oem).ToNot(BeNil())
+		Expect(oem.MountOpts).To(ContainElement("x-initrd.mount"))
+	})
+
+	It("rejects a read-write volume that is invalid or already defined by the installer media", func() {
+		customizeRunner.FileExtractor = &fileExtractorMock{
+			extractFunc: func(uri string) (path string, err error) { return "", nil },
+		}
+		for _, path := range []string{"/var", "oem", "/", "/oem/"} {
+			def := &image.Definition{
+				Image: image.Image{ImageType: "raw", OutputImageName: "customized.raw"},
+				Configuration: &image.Configuration{
+					Installation: install.Installation{
+						Bootloader: "grub",
+						RAW:        install.RAW{DiskSize: "35G"},
+						RWVolumes:  deployment.RWVolumes{{Path: path}},
+					},
+				},
+			}
+			err := customizeRunner.Run(context.Background(), def, output)
+			Expect(err).To(HaveOccurred(), path)
+			Expect(err.Error()).To(ContainSubstring("read-write volume"), path)
+		}
+	})
+
 	It("includes initrd extension in deployment when CPIO file exists", func() {
 		Expect(fs.WriteFile(output.InitrdExtensionFile(), []byte("fake cpio content"), vfs.FilePerm)).To(Succeed())
 

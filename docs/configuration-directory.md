@@ -66,11 +66,14 @@ raw:
 iso:
   device: "/dev/sda"
   netbootURL: http://localhost:8080/elemental.iso
+rwVolumes:
+  - path: /oem
 ```
 
 * `bootloader` - Required; Specifies the bootloader that will load the operating system.
 * `kernelCmdLine` - Optional; Parameters to add to the kernel when the operating system boots up. The tool itself defines the essential parameters to boot (e.g. `root=LABEL=SYSTEM`),
    the string provided here is simply concatenated after them in order to provide a mechanism to include additional custom parameters.
+* `rwVolumes` - Optional (prototype); Additional read-write volumes (btrfs subvolumes) created on the system partition, on top of the ones the installer media defines (`/var`, `/etc`, ...). Each entry takes `path` (absolute; must not be defined already), and optionally `noCopyOnWrite` and `mountOpts`. Use it when a solution needs a writable directory outside the default volumes; the root filesystem is read-only, so such a directory can not be created at runtime.
 * `raw` - Required for RAW and qcow2 images; Specifies disk image configurations.
   * `diskSize` - Required; Specifies the size of the resulting disk image. For qcow2 images this is the virtual disk size.
 * `iso` - Required for ISO images; Specifies ISO image configurations.

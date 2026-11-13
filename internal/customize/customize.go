@@ -220,6 +220,9 @@ func parseDeployment(
 	}
 
 	customizeDisk.Partitions = prepareDeploymentPartitions(installerDep.Disks[0].Partitions, additionalPartitions)
+	if err := addRWVolumes(customizeDisk.Partitions, install.RWVolumes); err != nil {
+		return nil, err
+	}
 
 	if mediaType == installer.ISO {
 		if install.ISO.Device == "" {
@@ -308,6 +311,34 @@ func prepareDeploymentPartitions(src, add []*deployment.Partition) []*deployment
 	system := src[len(src)-1]
 	system.MountRWVolumesInInitrd()
 	return append(preparedPartitionSlice, system)
+}
+
+// addRWVolumes appends the read-write volumes requested in 'install.yaml' to the SYSTEM
+// partition (always the last one, see prepareDeploymentPartitions). A path that the installer
+// media already defines is rejected instead of silently redefined.
+func addRWVolumes(partitions []*deployment.Partition, volumes deployment.RWVolumes) error {
+	if len(volumes) == 0 {
+		return nil
+	}
+
+	system := partitions[len(partitions)-1]
+	for _, vol := range volumes {
+		if !filepath.IsAbs(vol.Path) || filepath.Clean(vol.Path) != vol.Path || vol.Path == "/" {
+			return fmt.Errorf("invalid read-write volume path %q: an absolute, clean path other than '/' is required", vol.Path)
+		}
+		if vol.Snapshotted {
+			return fmt.Errorf("read-write volume %q: additional snapshotted volumes are not supported", vol.Path)
+		}
+		for _, existing := range system.RWVolumes {
+			if existing.Path == vol.Path {
+				return fmt.Errorf("read-write volume %q is already defined by the installer media", vol.Path)
+			}
+		}
+		system.RWVolumes = append(system.RWVolumes, vol)
+	}
+	system.MountRWVolumesInInitrd()
+
+	return nil
 }
 
 func writeAutoInstaller(fs vfs.FS, out string, mediaType installer.MediaType) (string, error) {

@@ -27,6 +27,7 @@ import (
 	"github.com/docker/go-units"
 
 	"github.com/suse/elemental/v3/pkg/crypto"
+	"github.com/suse/elemental/v3/pkg/deployment"
 )
 
 type DiskSize string
@@ -65,6 +66,11 @@ type Installation struct {
 	RAW           RAW           `yaml:"raw"`
 	ISO           ISO           `yaml:"iso"`
 	CryptoPolicy  crypto.Policy `yaml:"cryptoPolicy" validate:"omitempty,oneof=fips default"`
+	// RWVolumes lists additional read-write volumes (btrfs subvolumes) to create on the system
+	// partition, on top of the ones defined by the installer media. PROTOTYPE (T6.5): solutions
+	// whose workloads expect a writable top-level directory (Harvester: /oem) have no other way
+	// to get one on the read-only root.
+	RWVolumes deployment.RWVolumes `yaml:"rwVolumes,omitempty" validate:"dive"`
 }
 
 type RAW struct {
