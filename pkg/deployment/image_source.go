@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"strings"
 
 	"github.com/distribution/reference"
 	"go.yaml.in/yaml/v3"
@@ -193,6 +194,19 @@ func (i *ImageSource) UnmarshalYAML(data *yaml.Node) (err error) {
 }
 
 func (i *ImageSource) updateFromURI(uri string) error {
+	if !strings.Contains(uri, "://") {
+		// Without a scheme the value is an OCI image reference. It must not go through url.Parse:
+		// a registry with a port, such as "registry.org:5000/my/image", is either rejected there
+		// ("first path segment in URL cannot contain colon") or has its host taken for the scheme.
+		ref, err := parseImageReference(uri)
+		if err != nil {
+			return err
+		}
+		i.srcType = OCI
+		i.uri = ref
+		return nil
+	}
+
 	u, err := url.Parse(uri)
 	if err != nil {
 		return err
@@ -208,14 +222,6 @@ func (i *ImageSource) updateFromURI(uri string) error {
 	}
 	i.srcType = srcType
 	i.uri = value
-	if scheme == "" {
-		uri, err = parseImageReference(uri)
-		if err != nil {
-			return err
-		}
-		i.uri = uri
-		return nil
-	}
 	if srcType == OCI {
 		uri, err = parseImageReference(value)
 		if err != nil {
