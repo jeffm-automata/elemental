@@ -121,6 +121,24 @@ var _ = Describe("Fstab", Label("fstab"), func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(data)).To(Equal(updatedFstab))
 	})
+	It("keeps comment and blank lines when updating", func() {
+		Expect(fstab.Write(s, fstab.File, lines)).To(Succeed())
+		orig, err := tfs.ReadFile(fstab.File)
+		Expect(err).NotTo(HaveOccurred())
+		withComments := "# added by another tool\n" + string(orig) + "\n  # trailing comment\n"
+		Expect(tfs.WriteFile(fstab.File, []byte(withComments), 0644)).To(Succeed())
+		Expect(fstab.Update(
+			s, fstab.File, []fstab.Line{{MountPoint: "/etc"}}, []fstab.Line{{
+				Device: "UUID=afadf", MountPoint: "/etc", FileSystem: "btrfs",
+				Options: []string{"defaults", "subvol=/@/new/path/etc"},
+			}},
+		)).To(Succeed())
+		data, err := tfs.ReadFile(fstab.File)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(data)).To(HavePrefix("# added by another tool\n"))
+		Expect(string(data)).To(HaveSuffix("\n\n  # trailing comment\n"))
+		Expect(string(data)).To(ContainSubstring("subvol=/@/new/path/etc"))
+	})
 	It("fails to update fstab file on a read-only filesystem", func() {
 		Expect(fstab.Write(s, fstab.File, lines)).To(Succeed())
 		tfs, err := sysmock.ReadOnlyTestFS(tfs)

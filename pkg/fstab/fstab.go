@@ -41,6 +41,10 @@ type Line struct {
 	Options    []string
 	DumpFreq   int
 	FsckOrder  int
+
+	// verbatim holds a comment or blank line read from an existing fstab file. Such lines
+	// are never matched for replacement and are written back unchanged. PROTOTYPE (T6.4).
+	verbatim *string
 }
 
 // Write writes an fstab file at the given location including the given fstab lines
@@ -86,6 +90,12 @@ func Update(s *sys.System, fstabFile string, oldLines, newLines []Line) (err err
 	var fstabLines []Line
 	for scanner.Scan() {
 		line := scanner.Text()
+		// fstab(5): blank lines and lines starting with '#' are ignored. Keep them as they are
+		// instead of failing: files edited by an admin or another tool commonly have them.
+		if trimmed := strings.TrimSpace(line); trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			fstabLines = append(fstabLines, Line{verbatim: &line})
+			continue
+		}
 		fstabLine, err := fstabLineFromFields(strings.Fields(line))
 		if err != nil {
 			return fmt.Errorf("invalid fstab line '%s': %w", line, err)
@@ -116,6 +126,10 @@ func Update(s *sys.System, fstabFile string, oldLines, newLines []Line) (err err
 func updateFstabLines(lines []Line, oldLines, newLines []Line) []Line {
 	var fstabLines []Line
 	for _, line := range lines {
+		if line.verbatim != nil {
+			fstabLines = append(fstabLines, line)
+			continue
+		}
 		if i := matchFstabLine(line, oldLines); i >= 0 {
 			fstabLines = append(fstabLines, newLines[i])
 		} else {
@@ -128,6 +142,13 @@ func updateFstabLines(lines []Line, oldLines, newLines []Line) []Line {
 func writeFstabLines(w io.Writer, fstabLines []Line) error {
 	tw := tabwriter.NewWriter(w, 1, 4, 1, ' ', 0)
 	for _, fLine := range fstabLines {
+		if fLine.verbatim != nil {
+			// a line without tabs ends the current tabwriter column block, which is fine here
+			if _, err := fmt.Fprintf(tw, "%s\n", *fLine.verbatim); err != nil { // #nosec G705
+				return err
+			}
+			continue
+		}
 		_, err := fmt.Fprintf( // #nosec G705
 			tw, "%s\t%s\t%s\t%s\t%d\t%d\n",
 			fLine.Device, fLine.MountPoint, fLine.FileSystem,
