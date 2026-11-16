@@ -269,7 +269,8 @@ func setClusterToken(logger log.Logger, config ConfigMap) {
 
 	token := uuid.NewString()
 
-	logger.Info("Generated cluster token: %s", token)
+	// The token is a cluster credential: say that one was generated, never what it is.
+	logger.Info("Generated a cluster token, as none was set in the server configuration")
 	config[tokenKey] = token
 }
 
