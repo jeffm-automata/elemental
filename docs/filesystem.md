@@ -124,6 +124,33 @@ This means:
 - Local configuration changes persist across updates via the merge process
 - Rolling back the OS also rolls back `/etc` to match that OS version
 
+### Example: `/etc/elemental`
+
+Elemental describes each snapshot in `/etc/elemental`:
+
+- `deployment.yaml` is written by every installation and upgrade. Its `sourceOS` records where the OS content of the
+  snapshot came from: the `oci://` image for an upgrade, or the squashfs image of the installer media for an
+  installation.
+- `release.yaml` is the release marker. `elemental3 customize` adds it to the image it builds, and it tells which
+  release the freshly installed system runs, which `deployment.yaml` of an installation from installer media cannot:
+
+  ```yaml
+  releaseManifest: oci://registry.example.com/release-manifest:1.2.3
+  osImage: registry.example.com/base-os:1.2.3
+  installerImage: registry.example.com/base-os-iso:1.2.3
+  ```
+
+  `osImage` and `installerImage` are copied literally from `components.operatingSystem.image.base` and `.iso` of the
+  core platform [release manifest](release-manifest.md), `releaseManifest` is the manifest URI the image was built
+  from. Each reference is written as a single `key: value` line. Tools that read the file must ignore keys they do
+  not know.
+
+  The marker describes the snapshot of the installation only. Since `/etc` is merged into new snapshots, an upgrade
+  removes the inherited marker from the snapshot it creates, where `deployment.yaml` records the new OS image
+  instead. Rolling back to the snapshot of the installation brings the marker back together with the rest of that
+  `/etc`. Consumers should only trust the marker when `sourceOS` in `deployment.yaml` is not an `oci://` image, which
+  also covers systems upgraded by an Elemental version that does not know about the marker.
+
 #### 3 Way Merge on Snapshotted Directories
 
 The three way merge concept is common in distributed version control systems such as git. It essentially describes
