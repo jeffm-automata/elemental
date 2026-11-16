@@ -426,6 +426,42 @@ var _ = Describe("Kubernetes", func() {
 			}
 		})
 
+		It("Ships the install hook of bootstrap providers only for external bootstrap", func() {
+			m := NewManager(
+				system,
+				defaultHelm,
+				WithDownloader(&downloaderMock{}),
+				WithUnpackFunc(defaultUnpack),
+			)
+
+			conf := &image.Configuration{Kubernetes: kubernetes.Kubernetes{}}
+			Expect(m.configureKubernetes(context.Background(), conf, defaultManifest, output, config)).To(Succeed())
+			Expect(findFileContentsInConfig(config, "/opt/install.sh")).To(BeNil())
+
+			data := findFileContentsInConfig(config, filepath.Join("/", image.KubernetesPath(), k8sConfDeployScriptName))
+			Expect(data).NotTo(BeNil())
+			Expect(*data).To(ContainSubstring("export INSTALL_RKE2_TAR_PREFIX=/opt/rke2\n"))
+			Expect(*data).ToNot(ContainSubstring("START_RKE2"))
+
+			config = &butane.Config{}
+			conf = &image.Configuration{Kubernetes: kubernetes.Kubernetes{ExternalBootstrap: true}}
+			Expect(m.configureKubernetes(context.Background(), conf, defaultManifest, output, config)).To(Succeed())
+
+			data = findFileContentsInConfig(config, filepath.Join("/", image.KubernetesPath(), k8sConfDeployScriptName))
+			Expect(data).NotTo(BeNil())
+			Expect(*data).To(ContainSubstring(`[[ "${START_RKE2:-true}" == "true" ]] || exit 0`))
+			Expect(*data).To(HaveSuffix("systemctl enable --now \"rke2-${NODETYPE}.service\"\n"))
+
+			hook := findFileContentsInConfig(config, "/opt/install.sh")
+			Expect(hook).NotTo(BeNil())
+			Expect(*hook).To(HavePrefix("#!/bin/sh\n"))
+			Expect(*hook).To(ContainSubstring(`RUNTIME_ENV="/var/lib/elemental/runtime.env"`))
+			Expect(*hook).To(ContainSubstring(`if [ -x "/opt/rke2/bin/rke2" ]; then`))
+			Expect(*hook).To(ContainSubstring(`NODETYPE="${INSTALL_RKE2_TYPE:-server}"`))
+			Expect(*hook).To(ContainSubstring(`START_RKE2=false /bin/bash "/var/lib/elemental/kubernetes/k8s_conf_deploy.sh"`))
+			Expect(*hook).To(ContainSubstring(`systemctl start --no-block "k8s-resource-installer.service"`))
+		})
+
 		It("Skips the resource installer instead of failing it when external bootstrap gave no role", func() {
 			data, err := generateK8sResourcesUnit("/var/lib/elemental/kubernetes/k8s_res_deploy.sh", nil, false)
 			Expect(err).NotTo(HaveOccurred())

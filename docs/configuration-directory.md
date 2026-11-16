@@ -220,8 +220,19 @@ With `externalBootstrap: true` the image holds nothing that belongs to one clust
 Everything else in `server.yaml` and `agent.yaml` (for example `selinux` or `cni`) still ends up in
 `/etc/rancher/rke2/config.yaml.d/00-elemental-base-rke2-config.yaml` on the node. The token and, for joining nodes, the
 server address are supplied at boot in `/etc/rancher/rke2/config.yaml` or in a later file under `config.yaml.d`.
-The role is supplied at boot in `/var/lib/elemental/runtime.env`, as described in
-[Runtime Ignition Creation](cloud-enablement.md#runtime-ignition-creation).
+The role is supplied at boot in one of two ways:
+
+* in `/var/lib/elemental/runtime.env`, as described in
+  [Runtime Ignition Creation](cloud-enablement.md#runtime-ignition-creation). RKE2 is then installed and started by
+  `k8s-config-installer.service`, as on any other image;
+* by a bootstrap provider that calls the RKE2 installer. The image ships `/opt/install.sh` for this. It accepts the
+  `INSTALL_RKE2_TYPE` variable of the upstream installer (`agent` for workers, unset or `server` otherwise), installs RKE2
+  from the image without downloading anything, and leaves it to the caller to enable and start `rke2-server.service` or
+  `rke2-agent.service`. A server whose RKE2 configuration names no `server` to join is treated as the node that
+  initialises the cluster, and is the one that deploys the Helm charts and manifests of the image.
+
+The second way is what the Cluster API bootstrap provider for RKE2 does when `agentConfig.airGapped` is `true` in the
+`RKE2ControlPlane` and `RKE2ConfigTemplate`, so its bootstrap data needs no Elemental specific additions.
 
 ### Kubernetes Directory
 

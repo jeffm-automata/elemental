@@ -46,6 +46,7 @@ const (
 	k8sResourcesUnitName    = "k8s-resource-installer.service"
 	k8sConfigUnitName       = "k8s-config-installer.service"
 	k8sInstallSh            = "install.sh"
+	k8sBootstrapInstallName = "k8s_bootstrap_install.sh"
 )
 
 var (
@@ -66,6 +67,9 @@ var (
 
 	//go:embed templates/k8s_conf_deploy.sh.tpl
 	k8sConfDeployScriptTpl string
+
+	//go:embed templates/k8s_bootstrap_install.sh.tpl
+	k8sBootstrapInstallScriptTpl string
 )
 
 func (m *Manager) configureKubernetes(
@@ -255,6 +259,8 @@ func appendK8sConfigDeployScript(butaneCfg *butane.Config, k kubernetes.Kubernet
 
 		ExternalBootstrap bool
 		RuntimeEnvPath    string
+		BootstrapHook     string
+		RKE2Prefix        string
 	}{
 		Nodes:         k.Nodes,
 		APIVIP4:       k.Network.APIVIP4,
@@ -267,6 +273,8 @@ func appendK8sConfigDeployScript(butaneCfg *butane.Config, k kubernetes.Kubernet
 
 		ExternalBootstrap: k.ExternalBootstrap,
 		RuntimeEnvPath:    filepath.Join("/", image.RuntimeEnvPath()),
+		BootstrapHook:     filepath.Join("/", image.KubernetesBootstrapHookPath()),
+		RKE2Prefix:        filepath.Join("/", image.RKE2InstallPrefix()),
 	}
 
 	if initNode != nil {
@@ -280,6 +288,39 @@ func appendK8sConfigDeployScript(butaneCfg *butane.Config, k kubernetes.Kubernet
 
 	relativePath := filepath.Join(relativeK8sPath, k8sConfDeployScriptName)
 	butaneCfg.AddFileInline(relativePath, &data, 0o744)
+
+	if k.ExternalBootstrap {
+		return appendK8sBootstrapHook(butaneCfg, relativePath)
+	}
+
+	return nil
+}
+
+// appendK8sBootstrapHook adds the installer that bootstrap providers call on the node. It stands
+// in for the upstream RKE2 install script and installs RKE2 from the artifacts in the image.
+func appendK8sBootstrapHook(butaneCfg *butane.Config, configDeployScript string) error {
+	hookPath := filepath.Join("/", image.KubernetesBootstrapHookPath())
+
+	values := struct {
+		HookPath           string
+		RuntimeEnvPath     string
+		RKE2Binary         string
+		ConfigDeployScript string
+		ResourcesUnit      string
+	}{
+		HookPath:           hookPath,
+		RuntimeEnvPath:     filepath.Join("/", image.RuntimeEnvPath()),
+		RKE2Binary:         filepath.Join("/", image.RKE2BinaryPath()),
+		ConfigDeployScript: configDeployScript,
+		ResourcesUnit:      k8sResourcesUnitName,
+	}
+
+	data, err := template.Parse(k8sBootstrapInstallName, k8sBootstrapInstallScriptTpl, &values)
+	if err != nil {
+		return fmt.Errorf("parsing bootstrap install hook template: %w", err)
+	}
+
+	butaneCfg.AddFileInline(hookPath, &data, 0o755)
 	return nil
 }
 

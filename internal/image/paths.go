@@ -69,3 +69,18 @@ func HelmPath() string {
 func KubernetesInstallPath() string {
 	return filepath.Join("opt", "k8s", "install")
 }
+
+// KubernetesBootstrapHookPath is where bootstrap providers expect the RKE2 installer in air-gapped mode.
+func KubernetesBootstrapHookPath() string {
+	return filepath.Join("opt", "install.sh")
+}
+
+// RKE2BinaryPath is where the embedded RKE2 artifacts install the rke2 binary.
+func RKE2BinaryPath() string {
+	return filepath.Join(RKE2InstallPrefix(), "bin", "rke2")
+}
+
+// RKE2InstallPrefix is the directory the embedded RKE2 artifacts are installed to.
+func RKE2InstallPrefix() string {
+	return filepath.Join("opt", "rke2")
+}
