@@ -29,6 +29,7 @@ import (
 
 	"github.com/suse/elemental/v3/internal/image"
 	"github.com/suse/elemental/v3/internal/image/install"
+	"github.com/suse/elemental/v3/internal/image/kubernetes"
 	"github.com/suse/elemental/v3/internal/image/release"
 )
 
@@ -92,10 +93,33 @@ func validateLifecycleManager(fl validator.FieldLevel) bool {
 	})
 }
 
+// validateExternalBootstrap rejects the cluster.yaml settings that describe one particular cluster
+// when the image is built for clusters that are formed at boot.
+func validateExternalBootstrap(k *kubernetes.Kubernetes) error {
+	if !k.ExternalBootstrap {
+		return nil
+	}
+
+	var messages []string
+	if len(k.Nodes) > 0 {
+		messages = append(messages, "field \"nodes\" must not be set")
+	}
+
+	if k.Network != (kubernetes.Network{}) {
+		messages = append(messages, "field \"network\" must not be set")
+	}
+
+	if len(messages) > 0 {
+		return fmt.Errorf("validation failed: externalBootstrap is enabled in cluster.yaml: %s", strings.Join(messages, "; "))
+	}
+
+	return nil
+}
+
 func Validate(conf *image.Configuration) error {
 	err := getValidator().Struct(conf)
 	if err == nil {
-		return nil
+		return validateExternalBootstrap(&conf.Kubernetes)
 	}
 
 	var validationErrors validator.ValidationErrors

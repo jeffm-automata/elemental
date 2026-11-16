@@ -153,6 +153,7 @@ network:
     apiHost: api.cluster01.example.com
     apiVIP6: fd12:3456:789a::21
     apiVIPMode: managed
+externalBootstrap: false
 elementalEmbeddedRegistry:
   containerImages:
     - name: registry.rancher.com/rancher/shell:v0.5.0
@@ -190,6 +191,7 @@ elementalEmbeddedRegistry:
   * `apiVIP6` -  Required for multi-node clusters if not using `apiVIP`; Specifies the IPv6 address which will serve as the cluster LoadBalancer.
   * `apiHost` - Optional; Specifies the domain address for accessing the cluster.
   * `apiVIPMode` - Optional; Specifies how the API VIP will be handled. Supported values: `managed` (default), `external`. `managed` uses MetalLB to serve the desired IPv4/IPv6 addresses. `external` expects a user-defined third-party loadbalancing mechanism for IPv4/IPv6 address handling.
+* `externalBootstrap` - Optional; Defaults to `false`. Set to `true` to build an image for clusters that are formed at boot, by a bootstrap provider such as Cluster API or by user data, so that one image can serve any number of clusters. See [External bootstrap](#external-bootstrap).
 * `elementalEmbeddedRegistry` - Optional; Allows you to specify additional container images to be part of the final air-gapped build.
   * `containerImages` - Optional; Defines list of container images to embed, deduplicated with the ones discovered automatically from Helm charts and Kubernetes manifests.
     * `name` - Required; Specifies the name, with a tag or digest, of a container image to be air-gapped.
@@ -198,6 +200,23 @@ elementalEmbeddedRegistry:
     * `credentials` - Required;
       * `username` - Required; Defines the username for accessing the specified registry.
       * `password` - Required; Defines the password for accessing the specified registry.
+
+### External bootstrap
+
+By default an image describes one cluster: `customize` generates a cluster token when `server.yaml` has none, derives the
+`server` address from `network.apiVIP`, and every node started from the image uses both. That is wrong for an image that
+is meant to be shared, for example the machine image of a Cluster API infrastructure provider: every cluster built from
+it would have the same token.
+
+With `externalBootstrap: true` the image holds nothing that belongs to one cluster:
+
+* no cluster token is generated;
+* `nodes` and `network` must not be set in `cluster.yaml`;
+* `token` and `server` must not be set in `server.yaml` or `agent.yaml`.
+
+Everything else in `server.yaml` and `agent.yaml` (for example `selinux` or `cni`) still ends up in
+`/etc/rancher/rke2/config.yaml.d/00-elemental-base-rke2-config.yaml` on the node. The token and, for joining nodes, the
+server address are supplied at boot in `/etc/rancher/rke2/config.yaml` or in a later file under `config.yaml.d`.
 
 ### Kubernetes Directory
 

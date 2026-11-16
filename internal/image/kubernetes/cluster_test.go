@@ -60,6 +60,10 @@ var _ = Describe("Cluster", func() {
 			"/etc/kubernetes/config-dir/agent.yaml":      exampleAgentYaml,
 			"/etc/kubernetes/config-dir/registries.yaml": exampleRegistriesYaml,
 			"/etc/kubernetes/empty/server.yaml":          "",
+			"/etc/kubernetes/external/server.yaml":       "selinux: true\ncni: cilium\n",
+			"/etc/kubernetes/external/agent.yaml":        "debug: true\n",
+			"/etc/kubernetes/external/joining.yaml":      "server: https://192.168.122.50:9345\n",
+			"/etc/kubernetes/external/token-agent.yaml":  "token: token123\n",
 		})
 		Expect(err).ToNot(HaveOccurred())
 
@@ -106,6 +110,51 @@ var _ = Describe("Cluster", func() {
 		Expect(len(cluster.InitServerConfig)).To(Equal(2))
 		Expect(cluster.InitServerConfig).To(Equal(expectedInit))
 	})
+	It("Keeps cluster identity out of the configurations for external bootstrap", func() {
+		kubernetes := &Kubernetes{
+			ExternalBootstrap: true,
+			Config: Config{
+				ServerFilePath: "/etc/kubernetes/external/server.yaml",
+				AgentFilePath:  "/etc/kubernetes/external/agent.yaml",
+			},
+		}
+
+		cluster, err := NewCluster(s, kubernetes)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(cluster.InitServerConfig).To(Equal(ConfigMap{"selinux": true, "cni": "cilium"}))
+		Expect(cluster.JoiningServerConfig).To(Equal(cluster.InitServerConfig))
+		Expect(cluster.AgentConfig).To(Equal(ConfigMap{"selinux": true, "cni": "cilium", "debug": true}))
+	})
+
+	It("Builds for external bootstrap without any configuration file", func() {
+		cluster, err := NewCluster(s, &Kubernetes{ExternalBootstrap: true})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(cluster.InitServerConfig).To(BeEmpty())
+		Expect(cluster.JoiningServerConfig).To(BeEmpty())
+		Expect(cluster.AgentConfig).To(BeEmpty())
+	})
+
+	DescribeTable("Rejects cluster identity in the configuration files for external bootstrap",
+		func(serverFile, agentFile, expected string) {
+			kubernetes := &Kubernetes{
+				ExternalBootstrap: true,
+				Config:            Config{ServerFilePath: serverFile, AgentFilePath: agentFile},
+			}
+
+			_, err := NewCluster(s, kubernetes)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(expected))
+		},
+		Entry("token in server.yaml", "/etc/kubernetes/config-dir/server.yaml", "",
+			`server configuration sets "token", which must come from the bootstrap provider`),
+		Entry("server in server.yaml", "/etc/kubernetes/external/joining.yaml", "",
+			`server configuration sets "server", which must come from the bootstrap provider`),
+		Entry("token in agent.yaml", "/etc/kubernetes/external/server.yaml", "/etc/kubernetes/external/token-agent.yaml",
+			`agent configuration sets "token", which must come from the bootstrap provider`),
+	)
+
 	It("Loads configurations for runtime defined nodes", func() {
 		kubernetes := &Kubernetes{
 			Network: Network{

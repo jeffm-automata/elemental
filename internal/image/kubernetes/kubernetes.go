@@ -39,6 +39,10 @@ type Kubernetes struct {
 	Nodes          Nodes   `yaml:"nodes,omitempty" validate:"dive"`
 	Network        Network `yaml:"network,omitempty"`
 	Config         Config  `yaml:"-"`
+	// ExternalBootstrap - the cluster is formed by configuration that reaches each node at boot,
+	// from a bootstrap provider such as Cluster API or from user data. The image then carries
+	// nothing that belongs to one cluster or one node.
+	ExternalBootstrap bool `yaml:"externalBootstrap,omitempty"`
 
 	ElementalEmbeddedRegistry *ElementalEmbeddedRegistry `yaml:"elementalEmbeddedRegistry,omitempty" validate:"omitempty"`
 }

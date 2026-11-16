@@ -88,6 +88,13 @@ func NewCluster(s *sys.System, kube *Kubernetes) (*Cluster, error) {
 		return nil, fmt.Errorf("parsing agent config: %w", err)
 	}
 
+	if kube.ExternalBootstrap {
+		// The agent configuration is checked before the server values are copied into it below.
+		if err := rejectClusterIdentity(agentConfig, "agent"); err != nil {
+			return nil, err
+		}
+	}
+
 	// Ensure the agent uses the same cluster configuration values as the server
 	for _, key := range []string{tokenKey, serverKey, selinuxKey, cniKey} {
 		if v, ok := serverConfig[key]; ok {
@@ -213,9 +220,28 @@ func ParseKubernetesConfig(s *sys.System, configFile string) (ConfigMap, error) 
 	return config, nil
 }
 
+// rejectClusterIdentity fails if the given RKE2 configuration names a cluster to join or holds its
+// token. An image built for external bootstrap is shared by many clusters, so both must arrive at boot.
+func rejectClusterIdentity(config ConfigMap, name string) error {
+	for _, key := range []string{tokenKey, serverKey} {
+		if _, ok := config[key]; ok {
+			return fmt.Errorf("%s configuration sets %q, which must come from the bootstrap provider "+
+				"when externalBootstrap is enabled", name, key)
+		}
+	}
+
+	return nil
+}
+
 func setServerDefaults(logger log.Logger, kube *Kubernetes, server ConfigMap) error {
 	const rke2ServerPort = 9345
 	var serverAddr netip.Addr
+
+	if kube.ExternalBootstrap {
+		// No token is generated and no server address is derived: every cluster built from
+		// this image would share them.
+		return rejectClusterIdentity(server, "server")
+	}
 
 	// Parse VIP IPv4 address. If defined and valid,
 	// append the address to the server's tls-san configuration

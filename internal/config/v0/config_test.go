@@ -378,6 +378,24 @@ iso:
 		Expect(err.Error()).To(ContainSubstring(`chart "elemental-lifecycle-manager" must be listed under components.helm in release.yaml when Kubernetes is enabled`))
 	})
 
+	It("Parses externalBootstrap when no cluster identity is configured", func() {
+		Expect(fs.WriteFile(configDir.ClusterFilepath(), []byte("externalBootstrap: true\n"), 0644)).To(Succeed())
+
+		conf, err := Parse(fs, configDir)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(conf.Kubernetes.ExternalBootstrap).To(BeTrue())
+		Expect(conf.Kubernetes.Nodes).To(BeEmpty())
+	})
+
+	It("Fails when externalBootstrap is combined with nodes or network", func() {
+		clusterYAML := kubernetesClusterYAML + "\nexternalBootstrap: true\n"
+		Expect(fs.WriteFile(configDir.ClusterFilepath(), []byte(clusterYAML), 0644)).To(Succeed())
+
+		_, err := Parse(fs, configDir)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`externalBootstrap is enabled in cluster.yaml: field "nodes" must not be set; field "network" must not be set`))
+	})
+
 	It("Fails on invalid apiVIPMode value", func() {
 		clusterYAML := strings.Replace(kubernetesClusterYAML, "  apiVIP: 192.168.120.100.sslip.io", "  apiVIP: 192.168.120.100.sslip.io\n  apiVIPMode: invalid", 1)
 		Expect(fs.WriteFile(configDir.ClusterFilepath(), []byte(clusterYAML), 0644)).To(Succeed())
