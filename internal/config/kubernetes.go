@@ -123,21 +123,25 @@ func (m *Manager) configureKubernetes(
 	}
 
 	var initNode *kubernetes.Node
-	if len(conf.Kubernetes.Nodes) == 0 {
+	switch {
+	case conf.Kubernetes.ExternalBootstrap:
+		// The image is shared between clusters: no default role, so that a node whose boot-time
+		// configuration is missing does not start a cluster of its own.
+	case len(conf.Kubernetes.Nodes) == 0:
 		// Utilise the new runtime configuration approach to ensure that we specify a default
 		// 'initialiser server' setup if no nodes are defined. This ensures that both statically
 		// and runtime defined nodes will work with the same approach, without having to expose
 		// a static/runtime specific configuration flag to the user.
 		envContent := strings.Join([]string{"IS_INIT_NODE=true", "NODETYPE=server"}, "\n")
 		butaneCfg.AddFileInline(filepath.Join("/", image.RuntimeEnvPath()), &envContent, 0o644)
-	} else {
+	default:
 		initNode, err = kubernetes.FindInitNode(conf.Kubernetes.Nodes)
 		if err != nil {
 			return fmt.Errorf("attempting to find init node: %w", err)
 		}
 	}
 
-	err = appendK8sResources(butaneCfg, runtimeManifestsDir, runtimeHelmCharts, initNode)
+	err = appendK8sResources(butaneCfg, runtimeManifestsDir, runtimeHelmCharts, initNode, conf.Kubernetes.ExternalBootstrap)
 	if err != nil {
 		return err
 	}
@@ -155,7 +159,7 @@ func (m *Manager) configureKubernetes(
 	return nil
 }
 
-func appendK8sResources(butaneCfg *butane.Config, manifestsDir string, helmCharts []string, initNode *kubernetes.Node) error {
+func appendK8sResources(butaneCfg *butane.Config, manifestsDir string, helmCharts []string, initNode *kubernetes.Node, externalBootstrap bool) error {
 	if len(helmCharts) == 0 && manifestsDir == "" {
 		return nil
 	}
@@ -164,7 +168,7 @@ func appendK8sResources(butaneCfg *butane.Config, manifestsDir string, helmChart
 		return fmt.Errorf("generating kubernetes resource deployment script: %w", err)
 	}
 
-	if err := appendK8sResUnit(butaneCfg, initNode); err != nil {
+	if err := appendK8sResUnit(butaneCfg, initNode, externalBootstrap); err != nil {
 		return fmt.Errorf("generating kubernetes resource deployment unit: %w", err)
 	}
 
@@ -223,10 +227,10 @@ func appendK8sResDeployScript(butaneCfg *butane.Config, runtimeManifestsDir stri
 	return nil
 }
 
-func appendK8sResUnit(butaneCfg *butane.Config, initNode *kubernetes.Node) error {
+func appendK8sResUnit(butaneCfg *butane.Config, initNode *kubernetes.Node, externalBootstrap bool) error {
 	k8sScript := filepath.Join("/", image.KubernetesPath(), k8sResDeployScriptName)
 
-	k8sResourcesUnit, err := generateK8sResourcesUnit(k8sScript, initNode)
+	k8sResourcesUnit, err := generateK8sResourcesUnit(k8sScript, initNode, externalBootstrap)
 	if err != nil {
 		return err
 	}
@@ -248,6 +252,9 @@ func appendK8sConfigDeployScript(butaneCfg *butane.Config, k kubernetes.Kubernet
 		InitNode      kubernetes.Node
 		InstallPath   string
 		InstallScript string
+
+		ExternalBootstrap bool
+		RuntimeEnvPath    string
 	}{
 		Nodes:         k.Nodes,
 		APIVIP4:       k.Network.APIVIP4,
@@ -257,6 +264,9 @@ func appendK8sConfigDeployScript(butaneCfg *butane.Config, k kubernetes.Kubernet
 		InitNode:      kubernetes.Node{},
 		InstallPath:   k8sInstallPath,
 		InstallScript: filepath.Join(k8sInstallPath, k8sInstallSh),
+
+		ExternalBootstrap: k.ExternalBootstrap,
+		RuntimeEnvPath:    filepath.Join("/", image.RuntimeEnvPath()),
 	}
 
 	if initNode != nil {
@@ -273,17 +283,19 @@ func appendK8sConfigDeployScript(butaneCfg *butane.Config, k kubernetes.Kubernet
 	return nil
 }
 
-func generateK8sResourcesUnit(deployScript string, initNode *kubernetes.Node) (string, error) {
+func generateK8sResourcesUnit(deployScript string, initNode *kubernetes.Node, externalBootstrap bool) (string, error) {
 	values := struct {
 		KubernetesDir        string
 		ManifestDeployScript string
 		InitNode             kubernetes.Node
 		RuntimeEnvPath       string
+		ExternalBootstrap    bool
 	}{
 		KubernetesDir:        filepath.Dir(deployScript),
 		ManifestDeployScript: deployScript,
 		InitNode:             kubernetes.Node{},
 		RuntimeEnvPath:       filepath.Join("/", image.RuntimeEnvPath()),
+		ExternalBootstrap:    externalBootstrap,
 	}
 
 	if initNode != nil {

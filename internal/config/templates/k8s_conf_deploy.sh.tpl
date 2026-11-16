@@ -19,10 +19,19 @@ HOSTNAME=$(</etc/hostname)
   && HOSTNAME=$(</proc/sys/kernel/hostname)
 
 : "${NODETYPE:=${hosts[$HOSTNAME]:-}}"
+{{- if .ExternalBootstrap }}
+# The image is shared between clusters and carries no node role. Without one there is
+# nothing to do yet: the role arrives at boot, in {{ .RuntimeEnvPath }}.
+[[ -z "${NODETYPE}" ]] && {
+  echo "No node role given in '{{ .RuntimeEnvPath }}': not installing RKE2"
+  exit 0
+}
+{{- else }}
 [[ -z "${NODETYPE}" ]] && {
   echo "Error: Undeclared 'NODETYPE' for hostname '${HOSTNAME}'" >&2
   exit 1
 }
+{{- end }}
 
 is_init_node=false
 {{- if .InitNode.Hostname }}

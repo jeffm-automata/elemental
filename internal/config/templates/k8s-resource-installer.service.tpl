@@ -13,7 +13,12 @@ TimeoutSec=900
 Restart=on-failure
 RestartSec=60
 {{- if not .InitNode.Hostname }}
+{{- if .ExternalBootstrap }}
+# The role may be absent: the unit is then skipped, not failed.
+EnvironmentFile=-{{ .RuntimeEnvPath }}
+{{- else }}
 EnvironmentFile={{ .RuntimeEnvPath }}
+{{- end }}
 ExecCondition=/bin/sh -c '[ "$${IS_INIT_NODE}" = "true" ]'
 {{- end }}
 ExecStartPre=/bin/sh -c 'until [ "$(systemctl show -p SubState --value rke2-server.service)" = "running" ]; do sleep 10; done'

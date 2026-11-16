@@ -399,6 +399,44 @@ var _ = Describe("Kubernetes", func() {
 			Expect(*data).To(ContainSubstring(`NODETYPE=server`))
 		})
 
+		It("Gives the image no node role and no cluster token for external bootstrap", func() {
+			m := NewManager(
+				system,
+				defaultHelm,
+				WithDownloader(&downloaderMock{}),
+				WithUnpackFunc(defaultUnpack),
+			)
+
+			conf := &image.Configuration{Kubernetes: kubernetes.Kubernetes{ExternalBootstrap: true}}
+
+			Expect(m.configureKubernetes(context.Background(), conf, defaultManifest, output, config)).To(Succeed())
+
+			Expect(findFileContentsInConfig(config, filepath.Join("/", image.RuntimeEnvPath()))).To(BeNil())
+
+			data := findFileContentsInConfig(config, filepath.Join("/", image.KubernetesPath(), k8sConfDeployScriptName))
+			Expect(data).NotTo(BeNil())
+			Expect(*data).To(ContainSubstring(`echo "No node role given in '/var/lib/elemental/runtime.env': not installing RKE2"`))
+			Expect(*data).ToNot(ContainSubstring(`Undeclared 'NODETYPE'`))
+
+			for _, name := range []string{"init.yaml", "server.yaml", "agent.yaml"} {
+				data = findFileContentsInConfig(config, filepath.Join("/", image.KubernetesPath(), name))
+				Expect(data).NotTo(BeNil(), name)
+				Expect(*data).ToNot(ContainSubstring("token"), name)
+				Expect(*data).ToNot(ContainSubstring("server:"), name)
+			}
+		})
+
+		It("Skips the resource installer instead of failing it when external bootstrap gave no role", func() {
+			data, err := generateK8sResourcesUnit("/var/lib/elemental/kubernetes/k8s_res_deploy.sh", nil, false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(data).To(ContainSubstring("\nEnvironmentFile=/var/lib/elemental/runtime.env\n"))
+
+			data, err = generateK8sResourcesUnit("/var/lib/elemental/kubernetes/k8s_res_deploy.sh", nil, true)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(data).To(ContainSubstring("\nEnvironmentFile=-/var/lib/elemental/runtime.env\n"))
+			Expect(data).To(ContainSubstring(`ExecCondition=/bin/sh -c '[ "$${IS_INIT_NODE}" = "true" ]'`))
+		})
+
 		It("Uses server init config for a single explicitly configured server node", func() {
 			m := NewManager(
 				system,

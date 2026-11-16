@@ -211,12 +211,17 @@ it would have the same token.
 With `externalBootstrap: true` the image holds nothing that belongs to one cluster:
 
 * no cluster token is generated;
+* no default node role is written: without `externalBootstrap`, an image with no `nodes` starts every machine as the
+  initial server of a new cluster unless told otherwise at boot. Here a machine that receives no role does not install
+  or start RKE2;
 * `nodes` and `network` must not be set in `cluster.yaml`;
 * `token` and `server` must not be set in `server.yaml` or `agent.yaml`.
 
 Everything else in `server.yaml` and `agent.yaml` (for example `selinux` or `cni`) still ends up in
 `/etc/rancher/rke2/config.yaml.d/00-elemental-base-rke2-config.yaml` on the node. The token and, for joining nodes, the
 server address are supplied at boot in `/etc/rancher/rke2/config.yaml` or in a later file under `config.yaml.d`.
+The role is supplied at boot in `/var/lib/elemental/runtime.env`, as described in
+[Runtime Ignition Creation](cloud-enablement.md#runtime-ignition-creation).
 
 ### Kubernetes Directory
 
