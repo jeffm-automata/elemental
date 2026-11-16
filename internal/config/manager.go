@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/suse/elemental/v3/internal/butane"
@@ -73,6 +74,9 @@ type Manager struct {
 	unpackImage unpackFunc
 	helm        helmConfigurator
 	imageStore  imageStore
+
+	// cloudInitBinary returns the path of the elemental3ctl binary to include in the image
+	cloudInitBinary func() (string, error)
 }
 
 type Opts func(m *Manager)
@@ -119,6 +123,12 @@ func WithAirgap(airgap bool) Opts {
 	}
 }
 
+func WithCloudInitBinary(f func() (string, error)) Opts {
+	return func(m *Manager) {
+		m.cloudInitBinary = f
+	}
+}
+
 func WithImageStore(s imageStore) Opts {
 	return func(m *Manager) {
 		m.imageStore = s
@@ -149,6 +159,12 @@ func NewManager(sys *sys.System, helm helmConfigurator, opts ...Opts) *Manager {
 
 	if m.imageStore == nil {
 		m.imageStore = hauler.New(sys)
+	}
+
+	if m.cloudInitBinary == nil {
+		m.cloudInitBinary = func() (string, error) {
+			return exec.LookPath(cloudInitBinaryName)
+		}
 	}
 
 	if m.unpackImage == nil {

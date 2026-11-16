@@ -54,6 +54,10 @@ func RegistryBinaryPath() string {
 	return filepath.Join("usr", "local", "libexec", "elemental", "hauler")
 }
 
+func CloudInitBinaryPath() string {
+	return filepath.Join("usr", "local", "libexec", "elemental", "elemental3ctl")
+}
+
 func KubernetesManifestsPath() string {
 	return filepath.Join(KubernetesPath(), "manifests")
 }

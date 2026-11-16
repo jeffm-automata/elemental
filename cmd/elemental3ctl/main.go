@@ -40,6 +40,7 @@ func main() {
 		cmd.NewUnpackImageCommand(appName, action.Unpack),
 		cmd.NewBuildInstallerCommand(appName, action.BuildInstaller),
 		cmd.NewResetCommand(appName, action.Reset),
+		cmd.NewCloudInitCommand(appName, action.CloudInit),
 		cmd.NewVersionCommand(appName))
 
 	if err := application.Run(context.Background(), os.Args); err != nil {

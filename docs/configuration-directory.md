@@ -77,6 +77,29 @@ iso:
   * `device` - Required; Specifies the disk that will be used as the install device.
   * `netbootURL` - Required for netboot; When set, a netboot directory with the necessary netboot artifacts will be created next to the ISO for network booting. Specifies the URL that the customized ISO is fetched from. Supports `http://`, `https://`, and `nfs://`
 
+#### cloudInit (experimental)
+
+```yaml
+cloudInit:
+  enabled: true
+```
+
+* `cloudInit.enabled` - Optional; Includes the cloud-init services in the image. At boot time they apply:
+  * The user-data found in a NoCloud (`cidata`) or ConfigDrive (`config-2`) volume, once per instance. Supported formats are
+    `#cloud-config` (keys `hostname`, `users`, `ssh_authorized_keys`, `write_files` and `runcmd`; any other key is logged and
+    ignored), [yip](https://github.com/rancher/yip) documents and scripts. The hostname of the instance metadata is used unless
+    the user-data sets one.
+  * The yip documents found in `/system/oem`, `/oem` and `/usr/local/cloud-config`, on every boot.
+
+  Settings are applied after Ignition. Files, users and the hostname are applied before the network is configured and before
+  Kubernetes is installed, so the node role (`/var/lib/elemental/runtime.env`) and RKE2 configuration drop-ins can be provided
+  with `write_files`. `runcmd` commands are run last, once the network is online.
+
+> [!IMPORTANT]
+> Ignition fails to boot the system if it finds user-data it can not parse. When cloud-config user-data is provided through a
+> volume Ignition also reads for the configured platform (e.g. `ignition.platform.id=kubevirt` or `openstack`), set
+> `ignition.platform.id=metal` in `kernelCmdLine` instead.
+
 ### butane.yaml
 
 The `butane.yaml` optional file enables users to configure the actual operating system by allowing them to provide their own [Butane](https://coreos.github.io/butane/) configuration.

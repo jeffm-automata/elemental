@@ -57,6 +57,7 @@ var (
 // * Kubernetes configuration and deployment files
 // * Systemd extensions
 // * Kubernetes distribution installation service
+// * cloud-init services, if enabled
 //
 // it builds a CPIO file containing the Ignition configuration at /usr/lib/ignition/base.d, then the CPIO file
 // is used as an initrd extension allowing the user to provide additional user configuration to be merged on top.
@@ -79,8 +80,11 @@ func (m *Manager) configureSystem(ctx context.Context, conf *image.Configuration
 
 	k8sEnabled := conf.IsKubernetesEnabled()
 
+	cloudInitEnabled := conf.Installation.CloudInit.Enabled
+
 	if len(conf.ButaneConfig) == 0 &&
 		!k8sEnabled &&
+		!cloudInitEnabled &&
 		len(ext) == 0 {
 		m.system.Logger().Info("No ignition configuration required")
 		return nil
@@ -95,6 +99,13 @@ func (m *Manager) configureSystem(ctx context.Context, conf *image.Configuration
 		err = m.configureKubernetes(ctx, conf, manifest, output, &butaneCfg)
 		if err != nil {
 			return err
+		}
+	}
+
+	if cloudInitEnabled {
+		err = m.configureCloudInit(output, &butaneCfg)
+		if err != nil {
+			return fmt.Errorf("configuring cloud-init: %w", err)
 		}
 	}
 
