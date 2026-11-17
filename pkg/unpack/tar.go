@@ -103,3 +103,27 @@ func excludesFilter(root string, excludes ...string) func(h *tar.Header) (bool, 
 		return true, nil
 	}
 }
+
+// onlyFilesFilter keeps the files and links whose path in the archive matches one of the patterns
+// and that the next filter keeps too. Directories are dropped: the parents of a kept file are
+// created on demand, writable by the caller.
+func onlyFilesFilter(patterns []string, next func(h *tar.Header) (bool, error)) func(h *tar.Header) (bool, error) {
+	return func(h *tar.Header) (bool, error) {
+		switch h.Typeflag {
+		case tar.TypeReg, tar.TypeSymlink, tar.TypeLink:
+		default:
+			return false, nil
+		}
+		name := filepath.Join("/", filepath.Clean(h.Name))
+		for _, pattern := range patterns {
+			match, err := filepath.Match(filepath.Join("/", pattern), name)
+			if err != nil {
+				return false, err
+			}
+			if match {
+				return next(h)
+			}
+		}
+		return false, nil
+	}
+}
