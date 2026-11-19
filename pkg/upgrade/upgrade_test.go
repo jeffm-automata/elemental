@@ -101,6 +101,49 @@ var _ = Describe("Upgrade", Label("upgrade"), func() {
 			{"/etc/elemental/config.sh"},
 		}))
 	})
+	It("drops the release marker inherited from the previous snapshot", func() {
+		// Snapshotted volumes such as /etc are merged into the new snapshot, marker included.
+		marker := deployment.ReleaseMarker{
+			ReleaseManifest: "oci://registry.example.com/release-manifest:1.2.3",
+			OSImage:         "registry.example.com/base-os:1.2.3",
+		}
+		Expect(marker.Write(s, trans.Path)).To(Succeed())
+
+		Expect(u.Upgrade(d)).To(Succeed())
+
+		inherited, err := deployment.ParseReleaseMarker(s, trans.Path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(inherited).To(BeNil())
+
+		By("still recording the source of the upgrade in the deployment file")
+		written, err := deployment.Parse(s, trans.Path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(written.SourceOS.String()).To(Equal("dir:///some/dir"))
+	})
+	It("keeps the release marker that the overlay tree of an installation brings", func() {
+		// The overlay tree is applied after the inherited marker is dropped.
+		marker := deployment.ReleaseMarker{
+			ReleaseManifest: "oci://registry.example.com/release-manifest:1.2.3",
+			OSImage:         "registry.example.com/base-os:1.2.3",
+		}
+		runner.SideEffect = func(cmd string, args ...string) ([]byte, error) {
+			if cmd == "rsync" {
+				for _, arg := range args {
+					if strings.Contains(arg, "/opt/overlaytree/") {
+						return []byte{}, marker.Write(s, trans.Path)
+					}
+				}
+			}
+			return []byte{}, nil
+		}
+
+		Expect(u.Upgrade(d)).To(Succeed())
+
+		installed, err := deployment.ParseReleaseMarker(s, trans.Path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(installed).NotTo(BeNil())
+		Expect(*installed).To(Equal(marker))
+	})
 	It("fails on transaction initialization", func() {
 		t.InitErr = fmt.Errorf("init failed")
 		err := u.Upgrade(d)
