@@ -45,6 +45,34 @@ var _ = Describe("Image Source", Label("imagesource"), func() {
 		Expect(imgsrc.URI()).To(Equal("registry.org/my/image:latest"))
 		Expect(imgsrc.IsEmpty()).To(BeFalse())
 	})
+	It("initiates an OCI image source from a reference whose registry has a port", func() {
+		for _, ref := range []string{
+			"registry.org:5000/my/image:1.2",
+			"192.168.1.10:5000/my/image:1.2",
+			"localhost:5000/my/image:1.2",
+		} {
+			imgsrc, err := deployment.NewSrcFromURI(ref)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(imgsrc.IsOCI()).To(BeTrue())
+			Expect(imgsrc.URI()).To(Equal(ref))
+			Expect(imgsrc.String()).To(Equal("oci://" + ref))
+
+			imgsrc, err = deployment.NewSrcFromURI("oci://" + ref)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(imgsrc.URI()).To(Equal(ref))
+		}
+	})
+	It("keeps accepting a source type without slashes", func() {
+		imgsrc, err := deployment.NewSrcFromURI("dir:/some/path/to/directory")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(imgsrc.IsDir()).To(BeTrue())
+		Expect(imgsrc.URI()).To(Equal("/some/path/to/directory"))
+
+		imgsrc, err = deployment.NewSrcFromURI("raw:image.raw")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(imgsrc.IsRaw()).To(BeTrue())
+		Expect(imgsrc.URI()).To(Equal("image.raw"))
+	})
 	It("initiates a Raw image source from URI", func() {
 		imgsrc, err := deployment.NewSrcFromURI("raw:///some/path/to/image")
 		Expect(err).NotTo(HaveOccurred())
