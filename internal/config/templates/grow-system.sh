@@ -16,4 +16,8 @@ trap 'rm -rf "${defs}"' EXIT
 printf '[Partition]\nType=root\n' > "${defs}/50-system.conf"
 
 systemd-repart --dry-run=no --definitions="${defs}" "${disk}"
-/usr/lib/systemd/systemd-growfs /
+
+# The root of the system is a read-only snapshot. A file system is grown through any of its
+# mount points, as long as that one is writable: take the first read-write volume.
+rw="$(findmnt --raw --noheadings --nofsroot --source "${part}" --options rw --output TARGET | head -n 1)"
+/usr/lib/systemd/systemd-growfs "${rw:-/}"

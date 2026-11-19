@@ -76,7 +76,7 @@ var _ = Describe("Preinstalled image configuration", func() {
 		script := cfg.Storage.Files[0]
 		Expect(script.Path).To(Equal("/var/lib/elemental/grow-system.sh"))
 		Expect(*script.Contents.Inline).To(ContainSubstring("systemd-repart --dry-run=no"))
-		Expect(*script.Contents.Inline).To(ContainSubstring("systemd-growfs /"))
+		Expect(*script.Contents.Inline).To(ContainSubstring(`systemd-growfs "${rw:-/}"`))
 	})
 
 	It("places image archives where RKE2 imports them from", func() {
