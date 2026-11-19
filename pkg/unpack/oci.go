@@ -59,6 +59,7 @@ type OCI struct {
 	ctrdSock    string
 	ctrd        containerd.Interface
 	cache       *cache.Cache
+	onlyFiles   []string
 }
 
 type OCIOpt func(*OCI)
@@ -90,6 +91,17 @@ func WithRsyncFlagsOCI(flags ...string) OCIOpt {
 func WithContainerd(ctrd containerd.Interface) OCIOpt {
 	return func(o *OCI) {
 		o.ctrd = ctrd
+	}
+}
+
+// WithOnlyFilesOCI limits the unpack to the files and links matching one of the given patterns
+// (absolute paths or globs, as vfs.FindFile takes them) and does not restore their owners.
+// Directories of the image are not extracted, only created as parents. This is for fishing a file
+// out of an image: it needs neither CAP_CHOWN nor CAP_DAC_OVERRIDE, which a full unpack needs to
+// restore owners and to write below read-only directories.
+func WithOnlyFilesOCI(patterns ...string) OCIOpt {
+	return func(o *OCI) {
+		o.onlyFiles = patterns
 	}
 }
 
@@ -217,7 +229,11 @@ func (o OCI) unpack(ctx context.Context, destination string, excludes ...string)
 
 	r := progressbar.NewReader(reader, bar)
 
-	_, err = containerd.Apply(ctx, destination, &r, excludesFilter(destination, excludes...))
+	if len(o.onlyFiles) > 0 {
+		_, err = containerd.ApplyNoSameOwner(ctx, destination, &r, onlyFilesFilter(o.onlyFiles, excludesFilter(destination, excludes...)))
+	} else {
+		_, err = containerd.Apply(ctx, destination, &r, excludesFilter(destination, excludes...))
+	}
 
 	return digest.String(), err
 }

@@ -155,6 +155,41 @@ var _ = Describe("OCIFileExtractor", Label("file-extractor"), func() {
 		Expect(file).To(BeEmpty())
 	})
 
+	It("unpacks only the searched file when the unpacker can, without a full unpack", func() {
+		files := &fileUnpackerMock{unpackerMock: unpacker, found: true}
+		extr, err := extractor.New(defaultSearchPaths, extractor.WithOCIUnpacker(files), extractor.WithFS(tfs))
+		Expect(err).ToNot(HaveOccurred())
+
+		file, err := extr.ExtractFrom(dummyOCI)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(files.patterns).To(Equal(defaultSearchPaths))
+		Expect(files.fullUnpacks).To(Equal(0))
+		data, err := tfs.ReadFile(file)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(data)).To(Equal(dummyContent))
+	})
+
+	It("falls back to a full unpack when the file is not found among the matching entries", func() {
+		files := &fileUnpackerMock{unpackerMock: unpacker, found: false}
+		extr, err := extractor.New(defaultSearchPaths, extractor.WithOCIUnpacker(files), extractor.WithFS(tfs))
+		Expect(err).ToNot(HaveOccurred())
+
+		file, err := extr.ExtractFrom(dummyOCI)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(files.fullUnpacks).To(Equal(1))
+		Expect(filepath.Base(file)).To(Equal(fileName))
+	})
+
+	It("falls back to a full unpack when unpacking the matching entries fails", func() {
+		files := &fileUnpackerMock{unpackerMock: unpacker, failFiles: true}
+		extr, err := extractor.New(defaultSearchPaths, extractor.WithOCIUnpacker(files), extractor.WithFS(tfs))
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = extr.ExtractFrom(dummyOCI)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(files.fullUnpacks).To(Equal(1))
+	})
+
 	It("fails when produced digest is not in an OCI format", func() {
 		unpacker.digest = "d41d8cd98f00b204e9800998ecf8427e"
 		expErr := fmt.Sprintf("generating file store based on digest: invalid digest format '%s', expected '<algorithm>:<hash>'", unpacker.digest)
@@ -215,6 +250,31 @@ func (u unpackerMock) Unpack(ctx context.Context, uri, dest string, local bool) 
 	}
 
 	return u.digest, nil
+}
+
+// fileUnpackerMock can also unpack only matching entries, as the default unpacker does.
+type fileUnpackerMock struct {
+	*unpackerMock
+	found       bool
+	failFiles   bool
+	patterns    []string
+	fullUnpacks int
+}
+
+func (u *fileUnpackerMock) Unpack(ctx context.Context, uri, dest string, local bool) (string, error) {
+	u.fullUnpacks++
+	return u.unpackerMock.Unpack(ctx, uri, dest, local)
+}
+
+func (u *fileUnpackerMock) UnpackFiles(ctx context.Context, uri, dest string, local bool, patterns []string) (string, error) {
+	u.patterns = patterns
+	if u.failFiles {
+		return "", fmt.Errorf("unpack files failure")
+	}
+	if !u.found {
+		return u.digest, nil
+	}
+	return u.unpackerMock.Unpack(ctx, uri, dest, local)
 }
 
 func randomDigestEnc(n int) string {

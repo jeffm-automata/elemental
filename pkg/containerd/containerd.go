@@ -65,6 +65,12 @@ func Apply(ctx context.Context, destination string, r io.Reader, filter func(h *
 	return archive.Apply(ctx, destination, r, archive.WithFilter(filter))
 }
 
+// ApplyNoSameOwner is Apply without restoring the owners of the files: they belong to the caller.
+// It needs no privilege (CAP_CHOWN) and is meant for content that is only read, not installed.
+func ApplyNoSameOwner(ctx context.Context, destination string, r io.Reader, filter func(h *tar.Header) (bool, error)) (int64, error) {
+	return archive.Apply(ctx, destination, r, archive.WithFilter(filter), archive.WithNoSameOwner())
+}
+
 type Wrapper struct {
 	cli *client.Client
 	s   *sys.System

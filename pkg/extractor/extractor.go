@@ -35,6 +35,12 @@ type OCIUnpacker interface {
 	Unpack(ctx context.Context, uri, dest string, local bool) (digest string, err error)
 }
 
+// OCIFileUnpacker is an OCIUnpacker that can also unpack only the files matching some patterns,
+// without their owners. The extractor tries that first: it needs no privilege.
+type OCIFileUnpacker interface {
+	UnpackFiles(ctx context.Context, uri, dest string, local bool, patterns []string) (digest string, err error)
+}
+
 type ociUnpacker struct {
 	system   *sys.System
 	cache    *cache.Cache
@@ -43,6 +49,16 @@ type ociUnpacker struct {
 
 func (o *ociUnpacker) Unpack(ctx context.Context, uri, dest string, local bool) (digest string, err error) {
 	opts := []unpack.OCIOpt{unpack.WithLocalOCI(local), unpack.WithCacheOCI(o.cache)}
+	if o.platform != "" {
+		opts = append(opts, unpack.WithPlatformRefOCI(o.platform))
+	}
+
+	unpacker := unpack.NewOCIUnpacker(o.system, uri, opts...)
+	return unpacker.Unpack(ctx, dest)
+}
+
+func (o *ociUnpacker) UnpackFiles(ctx context.Context, uri, dest string, local bool, patterns []string) (digest string, err error) {
+	opts := []unpack.OCIOpt{unpack.WithLocalOCI(local), unpack.WithCacheOCI(o.cache), unpack.WithOnlyFilesOCI(patterns...)}
 	if o.platform != "" {
 		opts = append(opts, unpack.WithPlatformRefOCI(o.platform))
 	}
@@ -168,14 +184,9 @@ func (o *OCIFileExtractor) ExtractFrom(uri string) (path string, err error) {
 		_ = o.fs.RemoveAll(unpackDir)
 	}()
 
-	digest, err := o.unpacker.Unpack(o.ctx, uri, unpackDir, o.local)
+	digest, fileInOCI, err := o.unpackAndFind(uri, unpackDir)
 	if err != nil {
-		return "", fmt.Errorf("unpacking oci image: %w", err)
-	}
-
-	fileInOCI, err := vfs.FindFile(o.fs, unpackDir, o.searchPaths...)
-	if err != nil {
-		return "", fmt.Errorf("locating file at unpacked OCI filesystem: %w", err)
+		return "", err
 	}
 
 	fileStorePath, err := o.generateFileStorePath(digest)
@@ -193,6 +204,38 @@ func (o *OCIFileExtractor) ExtractFrom(uri string) (path string, err error) {
 	}
 
 	return fileInStore, nil
+}
+
+// unpackAndFind unpacks the image and locates the file. It first unpacks only what matches the
+// search paths, without owners, which needs no privilege. A file that is only reachable through a
+// link (a linked directory, or a link whose target does not match) is not found that way; then the
+// whole image is unpacked as before.
+func (o *OCIFileExtractor) unpackAndFind(uri, unpackDir string) (digest, file string, err error) {
+	if fu, ok := o.unpacker.(OCIFileUnpacker); ok {
+		digest, err = fu.UnpackFiles(o.ctx, uri, unpackDir, o.local, o.searchPaths)
+		if err == nil {
+			if file, err = vfs.FindFile(o.fs, unpackDir, o.searchPaths...); err == nil {
+				return digest, file, nil
+			}
+		}
+		if err = vfs.ForceRemoveAll(o.fs, unpackDir); err != nil {
+			return "", "", fmt.Errorf("cleaning oci image unpack directory: %w", err)
+		}
+		if err = vfs.MkdirAll(o.fs, unpackDir, 0700); err != nil {
+			return "", "", fmt.Errorf("creating oci image unpack directory: %w", err)
+		}
+	}
+
+	digest, err = o.unpacker.Unpack(o.ctx, uri, unpackDir, o.local)
+	if err != nil {
+		return "", "", fmt.Errorf("unpacking oci image: %w", err)
+	}
+
+	file, err = vfs.FindFile(o.fs, unpackDir, o.searchPaths...)
+	if err != nil {
+		return "", "", fmt.Errorf("locating file at unpacked OCI filesystem: %w", err)
+	}
+	return digest, file, nil
 }
 
 func (o *OCIFileExtractor) generateFileStorePath(digest string) (string, error) {
