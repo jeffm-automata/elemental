@@ -20,6 +20,8 @@ package containerd
 import (
 	"archive/tar"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"time"
@@ -131,6 +133,21 @@ func (w Wrapper) FindUnpackedImage(ctx context.Context, imageRef string) (ImgMet
 	return img, nil
 }
 
+// viewKey returns the key of the view, and of the lease protecting it, that a single run uses to
+// mount the snapshot with the given chain ID.
+//
+// The key is different for each run. The view and its lease are removed when a run ends, but a run that is
+// killed, or a host that loses power, leaves them behind in containerd. With a key that only depends on the
+// image, every later run for the same image would then fail because its view already exists. A view that was
+// left behind is not referenced by anything but its lease, and containerd collects it once that lease expires.
+func viewKey(chainID string) (string, error) {
+	suffix := make([]byte, 8)
+	if _, err := rand.Read(suffix); err != nil {
+		return "", fmt.Errorf("generating a unique snapshot view key: %w", err)
+	}
+	return fmt.Sprintf("extraction-view-%s-%s", chainID, hex.EncodeToString(suffix)), nil
+}
+
 func (w Wrapper) RunOnMountedROSnapshot(ctx context.Context, img ImgMeta, callback func(rootfs string) error) (err error) {
 	tempDir, err := vfs.TempDir(w.s.FS(), "", "elemental-mnt-")
 	if err != nil {
@@ -143,7 +160,10 @@ func (w Wrapper) RunOnMountedROSnapshot(ctx context.Context, img ImgMeta, callba
 		}
 	}()
 
-	key := fmt.Sprintf("extraction-view-%s", img.ChainID)
+	key, err := viewKey(img.ChainID)
+	if err != nil {
+		return err
+	}
 
 	// protect the snapshot from the garbage collector
 	ctx, done, err := w.cli.WithLease(ctx,
@@ -151,6 +171,9 @@ func (w Wrapper) RunOnMountedROSnapshot(ctx context.Context, img ImgMeta, callba
 		leases.WithExpiration(30*time.Minute),
 		leases.WithLabel("containerd.io/gc.ref.snapshot."+img.Snapshotter, key),
 	)
+	if err != nil {
+		return fmt.Errorf("failed to create lease %s: %w", key, err)
+	}
 	defer func() {
 		e := done(ctx)
 		if err == nil && e != nil {
