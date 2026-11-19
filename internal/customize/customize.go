@@ -128,7 +128,11 @@ func (r *Runner) Run(ctx context.Context, def *image.Definition, output config.O
 			installer.WithRawDiskSize(deployment.MiB(diskMiB)),
 			installer.WithDiskFormat(diskFormat),
 			installer.WithPreinstall(def.Configuration.Installation.RAW.Preinstalled),
+			installer.WithBootMenuTimeout(def.Configuration.Installation.RAW.BootMenuTimeout),
 		)
+		if def.Configuration.Installation.RAW.BootMenuTimeout != nil && !def.Configuration.Installation.RAW.Preinstalled {
+			return fmt.Errorf("'raw.bootMenuTimeout' is only supported for a preinstalled image")
+		}
 	} else if def.Configuration.Installation.RAW.Preinstalled {
 		return fmt.Errorf("a preinstalled image is only supported for 'raw' and 'qcow2' image types")
 	}

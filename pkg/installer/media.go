@@ -143,6 +143,7 @@ type Media struct {
 	netbootURL  string
 	diskFormat  DiskFormat
 	preinstall  bool
+	menuTimeout *uint
 }
 
 // WithBootloader allows to create an ISO object with the given bootloader interface instance
@@ -177,6 +178,14 @@ func WithDiskFormat(format DiskFormat) Option {
 func WithPreinstall(preinstall bool) Option {
 	return func(i *Media) {
 		i.preinstall = preinstall
+	}
+}
+
+// WithBootMenuTimeout sets the seconds the boot menu of a preinstalled Disk image waits before it
+// boots the default entry. Nil keeps the default of the boot loader configuration.
+func WithBootMenuTimeout(seconds *uint) Option {
+	return func(i *Media) {
+		i.menuTimeout = seconds
 	}
 }
 

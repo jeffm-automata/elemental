@@ -82,6 +82,10 @@ type RAW struct {
 	// build time, in a virtual machine. A machine created from the image boots the final
 	// system directly; the system partition is grown to the size of the disk at boot.
 	Preinstalled bool `yaml:"preinstalled,omitempty"`
+	// BootMenuTimeout is the number of seconds the boot menu of a preinstalled image waits
+	// before it boots the default entry. Unset keeps the default of the boot loader
+	// configuration (10 seconds). Only valid together with Preinstalled.
+	BootMenuTimeout *uint `yaml:"bootMenuTimeout,omitempty" validate:"omitempty,max=300"`
 }
 
 type ISO struct {

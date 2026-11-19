@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -158,5 +159,69 @@ func (i Media) preinstallDisk(tempDir, rawImg string, d *deployment.Deployment) 
 	}
 
 	i.s.Logger().Info("System installed to the image in %s", time.Since(start).Round(time.Second))
+
+	if i.menuTimeout != nil {
+		if err = i.setBootMenuTimeout(tempDir, rawImg, string(table), *i.menuTimeout); err != nil {
+			return fmt.Errorf("setting the boot menu timeout: %w", err)
+		}
+	}
+	return nil
+}
+
+// espGUID is the GPT partition type of an EFI system partition
+const espGUID = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
+
+// espOffset returns the byte offset of the EFI system partition from the output of 'sfdisk --dump'.
+func espOffset(table string) (uint64, error) {
+	sectorSize := uint64(512)
+	for _, line := range strings.Split(table, "\n") {
+		if v, ok := strings.CutPrefix(line, "sector-size:"); ok {
+			size, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+			if err != nil {
+				return 0, fmt.Errorf("parsing sector size '%s': %w", strings.TrimSpace(v), err)
+			}
+			sectorSize = size
+			continue
+		}
+		_, fields, ok := strings.Cut(line, " : ")
+		if !ok || !strings.Contains(strings.ToUpper(fields), "TYPE="+espGUID) {
+			continue
+		}
+		for _, field := range strings.Split(fields, ",") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(field), "start="); ok {
+				start, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+				if err != nil {
+					return 0, fmt.Errorf("parsing partition start '%s': %w", strings.TrimSpace(v), err)
+				}
+				return start * sectorSize, nil
+			}
+		}
+	}
+	return 0, errors.New("no EFI system partition in the partition table")
+}
+
+// setBootMenuTimeout stores 'timeout' in the grub environment block of the installed image, which
+// the boot loader configuration of an installed system reads. The block lives in the EFI system
+// partition; it is read and written in place with mtools, so nothing is mounted. Later upgrades
+// change other variables of the block with grub2-editenv and keep this one.
+func (i Media) setBootMenuTimeout(tempDir, rawImg, table string, seconds uint) error {
+	offset, err := espOffset(table)
+	if err != nil {
+		return err
+	}
+	img := fmt.Sprintf("%s@@%d", rawImg, offset)
+	env := filepath.Join(tempDir, "preinstall-grubenv")
+	defer func() { _ = i.s.FS().Remove(env) }()
+
+	if out, err := i.s.Runner().Run("mcopy", "-n", "-i", img, "::grubenv", env); err != nil {
+		return fmt.Errorf("reading the grub environment block: %w: %s", err, string(out))
+	}
+	if out, err := i.s.Runner().Run("grub2-editenv", env, "set", fmt.Sprintf("timeout=%d", seconds)); err != nil {
+		return fmt.Errorf("updating the grub environment block: %w: %s", err, string(out))
+	}
+	if out, err := i.s.Runner().Run("mcopy", "-o", "-i", img, env, "::grubenv"); err != nil {
+		return fmt.Errorf("writing the grub environment block: %w: %s", err, string(out))
+	}
+	i.s.Logger().Info("Boot menu timeout of the image set to %d s", seconds)
 	return nil
 }
