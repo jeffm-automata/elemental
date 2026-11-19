@@ -18,6 +18,7 @@ limitations under the License.
 package fstab_test
 
 import (
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -120,6 +121,58 @@ var _ = Describe("Fstab", Label("fstab"), func() {
 		data, err := tfs.ReadFile(fstab.File)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(data)).To(Equal(updatedFstab))
+	})
+	It("keeps comment and blank lines when updating", func() {
+		Expect(fstab.Write(s, fstab.File, lines)).To(Succeed())
+		orig, err := tfs.ReadFile(fstab.File)
+		Expect(err).NotTo(HaveOccurred())
+		entries := strings.SplitAfter(string(orig), "\n")
+		Expect(len(entries)).To(BeNumerically(">", 2))
+
+		header := "# added by another tool\n#\tdevice\tmountpoint\n"
+		middle := "\n\t# a comment\tbetween entries\n"
+		trailer := "\n  # trailing comment\n"
+		withComments := header + entries[0] + middle + strings.Join(entries[1:], "") + trailer
+		Expect(tfs.WriteFile(fstab.File, []byte(withComments), 0644)).To(Succeed())
+
+		By("writing the file back unchanged when no line matches")
+		Expect(fstab.Update(
+			s, fstab.File, []fstab.Line{{MountPoint: "/not/there"}}, []fstab.Line{{MountPoint: "/not/there"}},
+		)).To(Succeed())
+		data, err := tfs.ReadFile(fstab.File)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(data)).To(HavePrefix(header))
+		Expect(string(data)).To(ContainSubstring(middle))
+		Expect(string(data)).To(HaveSuffix(trailer))
+		Expect(strings.Fields(string(data))).To(Equal(strings.Fields(withComments)))
+
+		By("replacing the matching entry only")
+		Expect(fstab.Update(
+			s, fstab.File, []fstab.Line{{MountPoint: "/etc"}}, []fstab.Line{{
+				Device: "UUID=afadf", MountPoint: "/etc", FileSystem: "btrfs",
+				Options: []string{"defaults", "subvol=/@/new/path/etc"},
+			}},
+		)).To(Succeed())
+		data, err = tfs.ReadFile(fstab.File)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(data)).To(HavePrefix(header))
+		Expect(string(data)).To(ContainSubstring(middle))
+		Expect(string(data)).To(HaveSuffix(trailer))
+		Expect(string(data)).To(ContainSubstring("subvol=/@/new/path/etc"))
+		Expect(strings.Count(string(data), "\n")).To(Equal(strings.Count(withComments, "\n")))
+	})
+	It("does not replace a commented entry", func() {
+		commented := "#UUID=afadf /etc btrfs defaults,subvol=/@/old/path/etc 0 0\n"
+		Expect(tfs.WriteFile(fstab.File, []byte(commented), 0644)).To(Succeed())
+		Expect(fstab.Update(
+			s, fstab.File, []fstab.Line{{}}, []fstab.Line{{
+				Device: "UUID=afadf", MountPoint: "/etc", FileSystem: "btrfs",
+				Options: []string{"defaults", "subvol=/@/new/path/etc"},
+			}},
+		)).To(Succeed())
+		data, err := tfs.ReadFile(fstab.File)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(data)).To(Equal(commented))
 	})
 	It("fails to update fstab file on a read-only filesystem", func() {
 		Expect(fstab.Write(s, fstab.File, lines)).To(Succeed())
