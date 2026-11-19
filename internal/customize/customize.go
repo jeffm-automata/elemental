@@ -127,7 +127,10 @@ func (r *Runner) Run(ctx context.Context, def *image.Definition, output config.O
 		mediaOpts = append(mediaOpts,
 			installer.WithRawDiskSize(deployment.MiB(diskMiB)),
 			installer.WithDiskFormat(diskFormat),
+			installer.WithPreinstall(def.Configuration.Installation.RAW.Preinstalled),
 		)
+	} else if def.Configuration.Installation.RAW.Preinstalled {
+		return fmt.Errorf("a preinstalled image is only supported for 'raw' and 'qcow2' image types")
 	}
 
 	if len(def.Image.Overlays) > 0 && (mediaType != installer.Disk || diskFormat != installer.FormatQCOW2) {

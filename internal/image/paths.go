@@ -66,6 +66,11 @@ func RKE2ServerManifestsPath() string {
 	return filepath.Join("var", "lib", "rancher", "rke2", "server", "manifests")
 }
 
+// RKE2AgentImagesPath is where RKE2 looks for image archives to import when it starts.
+func RKE2AgentImagesPath() string {
+	return filepath.Join("var", "lib", "rancher", "rke2", "agent", "images")
+}
+
 func HelmPath() string {
 	return filepath.Join(KubernetesPath(), "helm")
 }

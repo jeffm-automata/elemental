@@ -81,10 +81,12 @@ func (m *Manager) configureSystem(ctx context.Context, conf *image.Configuration
 	k8sEnabled := conf.IsKubernetesEnabled()
 
 	cloudInitEnabled := conf.Installation.CloudInit.Enabled
+	preinstalled := conf.Installation.RAW.Preinstalled
 
 	if len(conf.ButaneConfig) == 0 &&
 		!k8sEnabled &&
 		!cloudInitEnabled &&
+		!preinstalled &&
 		len(ext) == 0 {
 		m.system.Logger().Info("No ignition configuration required")
 		return nil
@@ -99,6 +101,18 @@ func (m *Manager) configureSystem(ctx context.Context, conf *image.Configuration
 		err = m.configureKubernetes(ctx, conf, manifest, output, &butaneCfg)
 		if err != nil {
 			return err
+		}
+
+		err = m.preloadKubernetesImages(&conf.Kubernetes, output)
+		if err != nil {
+			return fmt.Errorf("preloading kubernetes images: %w", err)
+		}
+	}
+
+	if preinstalled {
+		err = configurePreinstalled(&butaneCfg)
+		if err != nil {
+			return fmt.Errorf("configuring preinstalled image: %w", err)
 		}
 	}
 

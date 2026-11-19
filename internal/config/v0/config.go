@@ -73,6 +73,10 @@ func (dir Dir) KubernetesRegistriesFilepath() string {
 	return filepath.Join(dir.KubernetesConfigDir(), "registries.yaml")
 }
 
+func (dir Dir) KubernetesImagesDir() string {
+	return filepath.Join(dir.kubernetesDir(), "images")
+}
+
 func (dir Dir) KubernetesManifestsDir() string {
 	return filepath.Join(dir.kubernetesDir(), "manifests")
 }
@@ -258,6 +262,18 @@ func parseKubernetesDir(f vfs.FS, configDir Dir, k *kubernetes.Kubernetes, r *re
 	for _, entry := range entries {
 		localManifestPath := filepath.Join(configDir.KubernetesManifestsDir(), entry.Name())
 		k.LocalManifests = append(k.LocalManifests, localManifestPath)
+	}
+
+	images, err := f.ReadDir(configDir.KubernetesImagesDir())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("reading %s: %w", configDir.KubernetesImagesDir(), err)
+	}
+
+	for _, entry := range images {
+		if entry.IsDir() {
+			continue
+		}
+		k.LocalImages = append(k.LocalImages, filepath.Join(configDir.KubernetesImagesDir(), entry.Name()))
 	}
 
 	k.Config = kubernetes.Config{}

@@ -55,4 +55,12 @@ RUN zypper --non-interactive removerepo repo-update || true; \
     zypper --non-interactive install --no-recommends xorriso helm hauler && \
     zypper clean --all
 
+# A preinstalled disk image ('raw.preinstalled' in install.yaml) is installed at build time in a
+# virtual machine. Uses /dev/kvm when the container has it, emulation otherwise.
+RUN ARCH=$(uname -m); \
+    QEMU=qemu-x86; FW=qemu-ovmf-x86_64; \
+    [[ "${ARCH}" == "aarch64" ]] && QEMU=qemu-arm && FW=qemu-uefi-aarch64; \
+    zypper --non-interactive install --no-recommends ${QEMU} ${FW} && \
+    zypper clean --all
+
 ENTRYPOINT ["/usr/bin/elemental3"]

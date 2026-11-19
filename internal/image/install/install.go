@@ -77,6 +77,11 @@ type CloudInit struct {
 
 type RAW struct {
 	DiskSize DiskSize `yaml:"diskSize" validate:"omitempty,disksize"`
+	// Preinstalled produces a disk image that already holds the installed system instead of
+	// installer media: the installation the image would run on its first boot is run once at
+	// build time, in a virtual machine. A machine created from the image boots the final
+	// system directly; the system partition is grown to the size of the disk at boot.
+	Preinstalled bool `yaml:"preinstalled,omitempty"`
 }
 
 type ISO struct {

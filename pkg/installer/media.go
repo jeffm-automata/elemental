@@ -142,6 +142,7 @@ type Media struct {
 	rawDiskSize deployment.MiB
 	netbootURL  string
 	diskFormat  DiskFormat
+	preinstall  bool
 }
 
 // WithBootloader allows to create an ISO object with the given bootloader interface instance
@@ -168,6 +169,14 @@ func WithRawDiskSize(size deployment.MiB) Option {
 func WithDiskFormat(format DiskFormat) Option {
 	return func(i *Media) {
 		i.diskFormat = format
+	}
+}
+
+// WithPreinstall makes Customize run the installation of Disk media once at build time, so
+// that the resulting image holds the installed system instead of installing it on first boot.
+func WithPreinstall(preinstall bool) Option {
+	return func(i *Media) {
+		i.preinstall = preinstall
 	}
 }
 
@@ -861,6 +870,11 @@ func (i Media) customizeDisk(tempDir string, d *deployment.Deployment, mappedFil
 			Excludes:  []string{filepath.Join(isoDir, "boot"), filepath.Join(isoDir, "EFI")},
 		},
 	}
+	if i.preinstall {
+		return i.createDiskImage(tempDir, i.rawDiskSize, parts, func(rawImg string) error {
+			return i.preinstallDisk(tempDir, rawImg, d)
+		})
+	}
 	return i.createDiskImage(tempDir, i.rawDiskSize, parts)
 }
 
@@ -874,9 +888,21 @@ func (i Media) extension() string {
 
 // createDiskImage creates the disk image output file with the given partitions. For qcow2
 // images the disk is first created as a sparse raw image within tempDir and then converted.
-func (i Media) createDiskImage(tempDir string, size deployment.MiB, parts []repart.Partition) error {
+//
+// The optional postProcess functions run on the raw disk image once it is partitioned and
+// populated, before any conversion.
+func (i Media) createDiskImage(tempDir string, size deployment.MiB, parts []repart.Partition, postProcess ...func(rawImg string) error) error {
 	if i.diskFormat != FormatQCOW2 {
-		return repart.CreateDiskImage(i.s, i.outputFile, size, parts)
+		err := repart.CreateDiskImage(i.s, i.outputFile, size, parts)
+		if err != nil {
+			return err
+		}
+		for _, fn := range postProcess {
+			if err = fn(i.outputFile); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	rawImg := filepath.Join(tempDir, "disk.raw")
@@ -885,6 +911,12 @@ func (i Media) createDiskImage(tempDir string, size deployment.MiB, parts []repa
 		return err
 	}
 	defer func() { _ = i.s.FS().Remove(rawImg) }()
+
+	for _, fn := range postProcess {
+		if err = fn(rawImg); err != nil {
+			return err
+		}
+	}
 
 	err = qemuimg.ConvertToQCOW2(i.s, rawImg, i.outputFile)
 	if err != nil {

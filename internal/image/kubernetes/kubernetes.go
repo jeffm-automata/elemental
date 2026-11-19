@@ -36,9 +36,11 @@ type Kubernetes struct {
 	Helm *Helm `yaml:"helm,omitempty" validate:"omitempty"`
 	// LocalManifests - local manifest files specified under config/kubernetes/manifests
 	LocalManifests []string
-	Nodes          Nodes   `yaml:"nodes,omitempty" validate:"dive"`
-	Network        Network `yaml:"network,omitempty"`
-	Config         Config  `yaml:"-"`
+	// LocalImages - image archives specified under config/kubernetes/images, preloaded on every node
+	LocalImages []string
+	Nodes       Nodes   `yaml:"nodes,omitempty" validate:"dive"`
+	Network     Network `yaml:"network,omitempty"`
+	Config      Config  `yaml:"-"`
 	// ExternalBootstrap - the cluster is formed by configuration that reaches each node at boot,
 	// from a bootstrap provider such as Cluster API or from user data. The image then carries
 	// nothing that belongs to one cluster or one node.
