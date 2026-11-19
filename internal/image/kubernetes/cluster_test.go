@@ -1,6 +1,7 @@
 package kubernetes
 
 import (
+	"bytes"
 	"maps"
 	"testing"
 
@@ -220,6 +221,20 @@ var _ = Describe("Cluster", func() {
 })
 
 var _ = Describe("Cluster Helpers", func() {
+	It("does not write the generated cluster token to the log", func() {
+		buffer := &bytes.Buffer{}
+		serverValues := ConfigMap{}
+
+		err := setServerDefaults(log.New(log.WithBuffer(buffer)), &Kubernetes{}, serverValues)
+		Expect(err).ToNot(HaveOccurred())
+
+		token, ok := serverValues["token"].(string)
+		Expect(ok).To(BeTrue())
+		Expect(token).ToNot(BeEmpty())
+		Expect(buffer.String()).To(ContainSubstring("Generated a cluster token"))
+		Expect(buffer.String()).ToNot(ContainSubstring(token))
+	})
+
 	It("sets default server configuration with IPv4 url", func() {
 		serverValues := ConfigMap{}
 		kubeConfig := Kubernetes{
