@@ -107,6 +107,11 @@ func (m *Manager) configureSystem(ctx context.Context, conf *image.Configuration
 		if err != nil {
 			return fmt.Errorf("preloading kubernetes images: %w", err)
 		}
+
+		err = m.preloadContainerImages(ctx, conf, manifest, output)
+		if err != nil {
+			return fmt.Errorf("preloading container images: %w", err)
+		}
 	}
 
 	if preinstalled {

@@ -396,6 +396,45 @@ iso:
 		Expect(err.Error()).To(ContainSubstring(`externalBootstrap is enabled in cluster.yaml: field "nodes" must not be set; field "network" must not be set`))
 	})
 
+	It("Parses the images to preload into a preinstalled image", func() {
+		install := strings.Replace(installYAML, "  diskSize: 35G", `  diskSize: 35G
+  preinstalled: true
+  preloadImages:
+    images:
+      - rancher/rancher-agent:v2.15.3`, 1)
+		Expect(fs.WriteFile(configDir.InstallFilepath(), []byte(install), 0644)).To(Succeed())
+
+		conf, err := Parse(fs, configDir)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(conf.Installation.RAW.PreloadImages.IncludeRelease()).To(BeTrue())
+		Expect(conf.Installation.RAW.PreloadImages.Images).To(Equal([]string{"rancher/rancher-agent:v2.15.3"}))
+	})
+
+	It("Preloads no images unless asked to", func() {
+		conf, err := Parse(fs, configDir)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(conf.Installation.RAW.PreloadImages).To(BeNil())
+		Expect(conf.Installation.RAW.PreloadImages.IncludeRelease()).To(BeFalse())
+	})
+
+	It("Fails when images are to be preloaded into an image that is not preinstalled", func() {
+		install := strings.Replace(installYAML, "  diskSize: 35G", "  diskSize: 35G\n  preloadImages:\n    release: true", 1)
+		Expect(fs.WriteFile(configDir.InstallFilepath(), []byte(install), 0644)).To(Succeed())
+
+		_, err := Parse(fs, configDir)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`field "raw.preloadImages" in install.yaml requires "raw.preinstalled: true"`))
+	})
+
+	It("Fails when the images to preload are an empty set", func() {
+		install := strings.Replace(installYAML, "  diskSize: 35G", "  diskSize: 35G\n  preinstalled: true\n  preloadImages:\n    release: false", 1)
+		Expect(fs.WriteFile(configDir.InstallFilepath(), []byte(install), 0644)).To(Succeed())
+
+		_, err := Parse(fs, configDir)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`lists no images and excludes those of the release`))
+	})
+
 	It("Fails on invalid apiVIPMode value", func() {
 		clusterYAML := strings.Replace(kubernetesClusterYAML, "  apiVIP: 192.168.120.100.sslip.io", "  apiVIP: 192.168.120.100.sslip.io\n  apiVIPMode: invalid", 1)
 		Expect(fs.WriteFile(configDir.ClusterFilepath(), []byte(clusterYAML), 0644)).To(Succeed())

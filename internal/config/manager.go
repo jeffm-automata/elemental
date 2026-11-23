@@ -24,6 +24,8 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	containerregistry "github.com/google/go-containerregistry/pkg/v1"
+
 	"github.com/suse/elemental/v3/internal/butane"
 	"github.com/suse/elemental/v3/internal/image"
 	"github.com/suse/elemental/v3/pkg/cache"
@@ -73,6 +75,7 @@ type Manager struct {
 	rmResolver  releaseManifestResolver
 	downloader  downloader
 	unpackImage unpackFunc
+	fetchImage  imageFetchFunc
 	helm        helmConfigurator
 	imageStore  imageStore
 
@@ -97,6 +100,13 @@ func WithDownloader(d downloader) Opts {
 func WithUnpackFunc(u unpackFunc) Opts {
 	return func(m *Manager) {
 		m.unpackImage = u
+	}
+}
+
+// WithImageFetchFunc sets how the container images to preload are fetched.
+func WithImageFetchFunc(f imageFetchFunc) Opts {
+	return func(m *Manager) {
+		m.fetchImage = f
 	}
 }
 
@@ -178,6 +188,17 @@ func NewManager(sys *sys.System, helm helmConfigurator, opts ...Opts) *Manager {
 			)
 			_, err := unpacker.Unpack(ctx, destDir)
 			return err
+		}
+	}
+
+	if m.fetchImage == nil {
+		m.fetchImage = func(ctx context.Context, imageRef string) (containerregistry.Image, error) {
+			return unpack.NewOCIUnpacker(
+				sys, imageRef,
+				unpack.WithLocalOCI(m.local),
+				unpack.WithCacheOCI(m.cache),
+				unpack.WithPlatformRefOCI(m.platform),
+			).Image(ctx)
 		}
 	}
 

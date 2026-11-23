@@ -38,6 +38,15 @@ const (
 	preinstallMemoryMiB = "4096"
 	preinstallCPUs      = "4"
 	preinstallSerialLog = "preinstall-console.log"
+
+	// PreloadRuntimeDisk and PreloadImagesDisk are the serial numbers of the disks that carry
+	// the archives of an ImagePreload. The installer script of the image looks for them.
+	PreloadRuntimeDisk = "elemental-runtime"
+	PreloadImagesDisk  = "elemental-images"
+	// PreloadLogPrefix starts every console line of the image preload, PreloadDoneMark follows it
+	// on the line that reports success.
+	PreloadLogPrefix = "elemental-preload:"
+	PreloadDoneMark  = "done,"
 )
 
 // firmware is a UEFI firmware image pair as shipped by a distribution
@@ -129,8 +138,8 @@ func (i Media) preinstallDisk(tempDir, rawImg string, d *deployment.Deployment) 
 		"-device", "virtio-rng-pci",
 		"-drive", fmt.Sprintf("if=pflash,format=raw,readonly=on,file=%s", fw.code),
 		"-drive", fmt.Sprintf("if=pflash,format=raw,file=%s", vars),
-		"-drive", fmt.Sprintf("if=virtio,format=raw,cache=unsafe,discard=unmap,file=%s", rawImg),
 	}
+	args = append(args, preinstallDisks(rawImg, i.preload)...)
 
 	i.s.Logger().Info("Installing the system to '%s' in a virtual machine, console output in '%s'", rawImg, serialLog)
 
@@ -157,6 +166,74 @@ func (i Media) preinstallDisk(tempDir, rawImg string, d *deployment.Deployment) 
 		return fmt.Errorf("installation in a virtual machine left no '%s' partition, see '%s'", label, serialLog)
 	}
 
+	if i.preload != nil {
+		result, err := preloadResult(i.s.FS(), serialLog)
+		if err != nil {
+			return err
+		}
+		i.s.Logger().Info("Container images preloaded: %s", result)
+	}
+
 	i.s.Logger().Info("System installed to the image in %s", time.Since(start).Round(time.Second))
 	return nil
+}
+
+// preinstallDisks returns the disks of the virtual machine: the image, and the archives of an
+// image preload when there is one.
+//
+// The image must be the first disk of the virtual machine. The installation records the device
+// it installed to (/dev/vda) in the deployment of the installed system, and an upgrade of that
+// system later addresses its disk by that name. Disks defined with -device come before those
+// that -drive if=virtio creates, so with more than one disk all of them are defined explicitly,
+// the image first.
+func preinstallDisks(rawImg string, preload *ImagePreload) []string {
+	const image = "if=%s,format=raw,cache=unsafe,discard=unmap,file=%s"
+
+	if preload == nil {
+		return []string{"-drive", fmt.Sprintf(image, "virtio", rawImg)}
+	}
+
+	args := []string{
+		"-drive", fmt.Sprintf(image, "none,id=system", rawImg),
+		"-device", "virtio-blk-pci,drive=system,bootindex=0",
+	}
+	for _, disk := range []struct{ serial, archive string }{
+		{PreloadRuntimeDisk, preload.RuntimeArchive},
+		{PreloadImagesDisk, preload.ImagesArchive},
+	} {
+		args = append(args,
+			"-drive", fmt.Sprintf("if=none,id=%s,format=raw,readonly=on,file=%s", disk.serial, disk.archive),
+			"-device", fmt.Sprintf("virtio-blk-pci,drive=%s,serial=%s", disk.serial, disk.serial),
+		)
+	}
+
+	return args
+}
+
+// preloadResult reads what the image preload reported on the console of the virtual machine.
+// The preload runs after the installation and cannot stop the virtual machine from ending as
+// a successful installation does, so its own report decides.
+func preloadResult(fs vfs.FS, serialLog string) (string, error) {
+	console, err := fs.ReadFile(serialLog)
+	if err != nil {
+		return "", fmt.Errorf("reading console output '%s': %w", serialLog, err)
+	}
+
+	var report []string
+	for line := range strings.Lines(string(console)) {
+		_, message, found := strings.Cut(strings.TrimSpace(line), PreloadLogPrefix)
+		if !found {
+			continue
+		}
+		message = strings.TrimSpace(message)
+		if result, done := strings.CutPrefix(message, PreloadDoneMark); done {
+			return strings.TrimSpace(result), nil
+		}
+		report = append(report, message)
+	}
+
+	if len(report) == 0 {
+		return "", fmt.Errorf("the container images were not preloaded: the installation did not run the preload, see '%s'", serialLog)
+	}
+	return "", fmt.Errorf("preloading the container images failed, see '%s': %s", serialLog, strings.Join(report, "; "))
 }

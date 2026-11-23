@@ -116,10 +116,32 @@ func validateExternalBootstrap(k *kubernetes.Kubernetes) error {
 	return nil
 }
 
+// validatePreloadImages rejects preloaded images where there is no build-time installation to
+// fill the image store in, or nothing to fill it with.
+func validatePreloadImages(conf *image.Configuration) error {
+	preload := conf.Installation.RAW.PreloadImages
+	if preload == nil {
+		return nil
+	}
+
+	if !conf.Installation.RAW.Preinstalled {
+		return fmt.Errorf("validation failed: field \"raw.preloadImages\" in install.yaml requires \"raw.preinstalled: true\"")
+	}
+
+	if !preload.IncludeRelease() && len(preload.Images) == 0 {
+		return fmt.Errorf("validation failed: field \"raw.preloadImages\" in install.yaml lists no images and excludes those of the release")
+	}
+
+	return nil
+}
+
 func Validate(conf *image.Configuration) error {
 	err := getValidator().Struct(conf)
 	if err == nil {
-		return validateExternalBootstrap(&conf.Kubernetes)
+		if err = validateExternalBootstrap(&conf.Kubernetes); err != nil {
+			return err
+		}
+		return validatePreloadImages(conf)
 	}
 
 	var validationErrors validator.ValidationErrors

@@ -143,6 +143,17 @@ type Media struct {
 	netbootURL  string
 	diskFormat  DiskFormat
 	preinstall  bool
+	preload     *ImagePreload
+}
+
+// ImagePreload is what the build-time installation fills the container image store of the
+// installed system from. Both archives are attached to the virtual machine as read-only disks
+// and are not part of the image.
+type ImagePreload struct {
+	// RuntimeArchive is a tar archive of the files of the Kubernetes runtime image.
+	RuntimeArchive string
+	// ImagesArchive is an OCI archive of the container images.
+	ImagesArchive string
 }
 
 // WithBootloader allows to create an ISO object with the given bootloader interface instance
@@ -177,6 +188,14 @@ func WithDiskFormat(format DiskFormat) Option {
 func WithPreinstall(preinstall bool) Option {
 	return func(i *Media) {
 		i.preinstall = preinstall
+	}
+}
+
+// WithImagePreload makes the build-time installation of a preinstalled image fill the container
+// image store of the installed system from the given archives.
+func WithImagePreload(preload *ImagePreload) Option {
+	return func(i *Media) {
+		i.preload = preload
 	}
 }
 
