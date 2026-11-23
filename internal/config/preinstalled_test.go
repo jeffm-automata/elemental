@@ -96,6 +96,35 @@ var _ = Describe("Preinstalled image configuration", func() {
 		Expect(string(data)).To(Equal("custom"))
 	})
 
+	It("switches on RKE2's record of imported archives, so that they are imported once", func() {
+		k := &kubernetes.Kubernetes{LocalImages: []string{"/config/kubernetes/images/custom.tar"}}
+
+		Expect(NewManager(system, nil).preloadKubernetesImages(k, output)).To(Succeed())
+
+		data, err := fs.ReadFile(filepath.Join(output.OverlaysDir(), "var/lib/rancher/rke2/agent/images/.cache.json"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(data).To(BeEmpty())
+
+		// the record compares modification times by the second
+		info, err := fs.Stat(filepath.Join(output.OverlaysDir(), "var/lib/rancher/rke2/agent/images/custom.tar"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(info.ModTime().Nanosecond()).To(BeZero())
+	})
+
+	It("keeps a record file the configuration directory brings along", func() {
+		Expect(fs.WriteFile("/config/kubernetes/images/.cache.json", []byte("{}"), 0o644)).To(Succeed())
+		k := &kubernetes.Kubernetes{LocalImages: []string{
+			"/config/kubernetes/images/.cache.json",
+			"/config/kubernetes/images/custom.tar",
+		}}
+
+		Expect(NewManager(system, nil).preloadKubernetesImages(k, output)).To(Succeed())
+
+		data, err := fs.ReadFile(filepath.Join(output.OverlaysDir(), "var/lib/rancher/rke2/agent/images/.cache.json"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(data)).To(Equal("{}"))
+	})
+
 	It("does nothing without image archives", func() {
 		Expect(NewManager(system, nil).preloadKubernetesImages(&kubernetes.Kubernetes{}, output)).To(Succeed())
 

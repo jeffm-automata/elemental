@@ -20,7 +20,9 @@ package config
 import (
 	_ "embed"
 	"fmt"
+	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/suse/elemental/v3/internal/butane"
 	"github.com/suse/elemental/v3/internal/image"
@@ -32,6 +34,9 @@ import (
 const (
 	growSystemUnitName   = "elemental-grow-system.service"
 	growSystemScriptName = "grow-system.sh"
+	// rke2ImportCacheName is the file in RKE2's image directory in which it records the archives
+	// and image lists it has imported (k3s pkg/agent/containerd/watcher.go).
+	rke2ImportCacheName = ".cache.json"
 )
 
 var (
@@ -80,8 +85,28 @@ func (m *Manager) preloadKubernetesImages(k *kubernetes.Kubernetes, output Outpu
 
 	for _, archive := range k.LocalImages {
 		m.system.Logger().Info("Preloading image archive %s", filepath.Base(archive))
-		if err := vfs.CopyFile(fs, archive, filepath.Join(target, filepath.Base(archive))); err != nil {
+		placed := filepath.Join(target, filepath.Base(archive))
+		if err := vfs.CopyFile(fs, archive, placed); err != nil {
 			return fmt.Errorf("copying image archive '%s': %w", archive, err)
+		}
+		// The record keeps modification times by the second and imports again whatever is newer
+		// than its record: a file with a fraction of a second in its time is imported at every start.
+		if raw, err := fs.RawPath(placed); err == nil {
+			whole := time.Now().Truncate(time.Second)
+			if err := os.Chtimes(raw, whole, whole); err != nil {
+				return fmt.Errorf("setting the modification time of '%s': %w", placed, err)
+			}
+		}
+	}
+
+	// RKE2 imports every archive of this directory again each time it starts, unless the directory
+	// holds the file it records imported archives in (size and modification time). It never creates
+	// that file itself: an empty one switches the record on. Without it the archives of the image
+	// are imported again after every reboot and every upgrade, for as long as they exist.
+	cache := filepath.Join(target, rke2ImportCacheName)
+	if exists, _ := vfs.Exists(fs, cache); !exists {
+		if err := fs.WriteFile(cache, []byte{}, vfs.FilePerm); err != nil {
+			return fmt.Errorf("creating the image import record '%s': %w", cache, err)
 		}
 	}
 
