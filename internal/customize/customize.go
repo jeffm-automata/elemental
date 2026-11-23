@@ -29,6 +29,7 @@ import (
 	"github.com/suse/elemental/v3/internal/image"
 	"github.com/suse/elemental/v3/internal/image/install"
 	"github.com/suse/elemental/v3/internal/template"
+	"github.com/suse/elemental/v3/pkg/btrfs"
 	"github.com/suse/elemental/v3/pkg/deployment"
 	"github.com/suse/elemental/v3/pkg/fips"
 	"github.com/suse/elemental/v3/pkg/installer"
@@ -129,6 +130,12 @@ func (r *Runner) Run(ctx context.Context, def *image.Definition, output config.O
 			installer.WithDiskFormat(diskFormat),
 			installer.WithPreinstall(def.Configuration.Installation.RAW.Preinstalled),
 		)
+		if def.Configuration.Installation.RAW.PreloadImages != nil {
+			mediaOpts = append(mediaOpts, installer.WithImagePreload(&installer.ImagePreload{
+				RuntimeArchive: output.PreloadRuntimeArchive(),
+				ImagesArchive:  output.PreloadImagesArchive(),
+			}))
+		}
 	} else if def.Configuration.Installation.RAW.Preinstalled {
 		return fmt.Errorf("a preinstalled image is only supported for 'raw' and 'qcow2' image types")
 	}
@@ -255,13 +262,23 @@ func parseDeployment(
 
 	// Make sure that we define a valid installer config script if such was not defined
 	// during the build process of the ISO that is currently being customized.
+	preload := mediaType == installer.Disk && install.RAW.PreloadImages != nil
 	if installerDep.Installer.CfgScript == "" {
-		autoInst, err := writeAutoInstaller(fs, output.RootPath, mediaType)
+		var varVolume string
+		if preload {
+			if varVolume, err = varSubvolume(installerDep); err != nil {
+				return nil, err
+			}
+		}
+
+		autoInst, err := writeAutoInstaller(fs, output.RootPath, mediaType, installerDep.GetSystemLabel(), varVolume)
 		if err != nil {
 			return nil, fmt.Errorf("writing default '%s' installer script: %w", autoInstallerScriptName, err)
 		}
 
 		d.Installer.CfgScript = autoInst
+	} else if preload {
+		return nil, fmt.Errorf("the installer image defines its own installer script: container images can only be preloaded with the default one")
 	}
 
 	return d, nil
@@ -313,11 +330,42 @@ func prepareDeploymentPartitions(src, add []*deployment.Partition) []*deployment
 	return append(preparedPartitionSlice, system)
 }
 
-func writeAutoInstaller(fs vfs.FS, out string, mediaType installer.MediaType) (string, error) {
+// varSubvolume returns the btrfs subvolume of the system partition that holds /var, where the
+// container image store of the installed system is.
+func varSubvolume(d *deployment.Deployment) (string, error) {
+	const varPath = "/var"
+
+	system := d.GetSystemPartition()
+	if system != nil && system.FileSystem == deployment.Btrfs {
+		for _, volume := range system.RWVolumes {
+			if volume.Path == varPath && !volume.Snapshotted {
+				return btrfs.TopSubVol + varPath, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("preloading container images requires '%s' to be a read-write volume of a btrfs system partition that is not snapshotted", varPath)
+}
+
+func writeAutoInstaller(fs vfs.FS, out string, mediaType installer.MediaType, systemLabel, preloadVolume string) (string, error) {
 	values := struct {
-		MediaType string
+		MediaType     string
+		PreloadImages bool
+		SystemLabel   string
+		VarSubvolume  string
+		RuntimeDisk   string
+		ImagesDisk    string
+		LogPrefix     string
+		DoneMark      string
 	}{
-		MediaType: mediaType.String(),
+		MediaType:     mediaType.String(),
+		PreloadImages: preloadVolume != "",
+		SystemLabel:   systemLabel,
+		VarSubvolume:  preloadVolume,
+		RuntimeDisk:   installer.PreloadRuntimeDisk,
+		ImagesDisk:    installer.PreloadImagesDisk,
+		LogPrefix:     installer.PreloadLogPrefix,
+		DoneMark:      installer.PreloadDoneMark,
 	}
 
 	data, err := template.Parse(autoInstallerScriptName, autoInstallerScriptTpl, &values)

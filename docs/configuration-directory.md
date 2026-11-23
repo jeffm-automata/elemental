@@ -77,6 +77,46 @@ iso:
   * `device` - Required; Specifies the disk that will be used as the install device.
   * `netbootURL` - Required for netboot; When set, a netboot directory with the necessary netboot artifacts will be created next to the ISO for network booting. Specifies the URL that the customized ISO is fetched from. Supports `http://`, `https://`, and `nfs://`
 
+#### Preinstalled images and preloaded container images (experimental)
+
+```yaml
+raw:
+  diskSize: 20G
+  preinstalled: true
+  preloadImages:
+    release: true
+    images:
+      - docker.io/rancher/rancher-agent:v2.15.3
+```
+
+* `raw.preinstalled` - Optional; For RAW and qcow2 images. The installation that the image would run on its first boot is run
+  once at build time, in a virtual machine without network (requires `qemu` and its UEFI firmware; `/dev/kvm` is used when
+  present). A machine created from the image boots the installed system directly. The installed system itself is never booted
+  at build time, so whatever a system creates on its first boot (machine ID, SSH host keys) is still created on each machine.
+* `raw.preloadImages` - Optional; Requires `preinstalled`. Fills the container image store of the installed system at build
+  time, so that a node started from the image neither pulls nor unpacks these images. Meant for images of which many machines
+  are started, where the time a node needs to become ready matters more than the size of the image.
+  * `release` - Optional, defaults to `true`; Includes what the release needs on a node: the image sets of RKE2 for the
+    configured CNI and ingress controller (the image lists shipped with the RKE2 artifacts of the release), the images the
+    release manifest declares for the enabled Helm charts (`images` of a chart) and those found in the Kubernetes manifests of
+    the configuration directory. Images of a Helm chart that the manifest does not declare are not known at build time: list
+    them under `images`.
+  * `images` - Optional; More image references to include, for instance the images a management server makes every node
+    pull. A list that only names what the cluster itself needs gives an image that depends on no management server.
+
+  How it works: `elemental3 customize` fetches the images (through the cache given with `--cache-dir`) into one OCI archive
+  and extracts the RKE2 runtime image. Both are attached, as read-only disks, to the virtual machine that installs the image.
+  After the installation, the containerd of that runtime imports the archive into `/var/lib/rancher/rke2/agent/containerd` of
+  the installed system, with the layers unpacked, and the runtime is placed where RKE2 looks for it before it pulls it
+  (`/var/lib/rancher/rke2/data`). Neither the archives nor the script remain active in the image: a system that is reset from
+  its recovery partition starts with an empty image store and pulls as usual.
+
+  Limits: the image is the first disk of the build-time virtual machine (`/dev/vda`), which is the device name the installed
+  system records for itself, as without preloaded images; the images are those of the build architecture; they are unpacked for the `overlayfs` snapshotter, which is the
+  default of RKE2; the image list must include the RKE2 runtime image (it does with `release: true`); with RKE2's
+  `system-default-registry` set at boot time rather than in `kubernetes/config/server.yaml`, RKE2 extracts its runtime again.
+  Nothing removes preloaded images that a later release no longer uses, other than the kubelet's image garbage collection.
+
 #### cloudInit (experimental)
 
 ```yaml

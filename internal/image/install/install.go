@@ -82,6 +82,27 @@ type RAW struct {
 	// build time, in a virtual machine. A machine created from the image boots the final
 	// system directly; the system partition is grown to the size of the disk at boot.
 	Preinstalled bool `yaml:"preinstalled,omitempty"`
+	// PreloadImages fills the container image store of a preinstalled image at build time, so
+	// that a machine created from the image starts its Kubernetes node without pulling and
+	// unpacking these images. Requires Preinstalled.
+	PreloadImages *PreloadImages `yaml:"preloadImages,omitempty"`
+}
+
+// PreloadImages lists the container images a preinstalled image holds, pulled and unpacked.
+type PreloadImages struct {
+	// Release includes the images the release itself needs on a node: the image sets of the
+	// Kubernetes distribution for the configured CNI and ingress controller, and the images the
+	// release manifest or the configuration directory declare for the enabled Helm charts and
+	// manifests. Defaults to true.
+	Release *bool `yaml:"release,omitempty"`
+	// Images are more image references to include, for example what a management server makes
+	// every node of an imported cluster pull.
+	Images []string `yaml:"images,omitempty" validate:"dive,required"`
+}
+
+// IncludeRelease tells whether the images of the release are part of the preloaded images.
+func (p *PreloadImages) IncludeRelease() bool {
+	return p != nil && (p.Release == nil || *p.Release)
 }
 
 type ISO struct {
