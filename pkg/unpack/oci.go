@@ -165,36 +165,7 @@ func (o OCI) synchedUnpack(ctx context.Context, destination string, excludes []s
 }
 
 func (o OCI) unpack(ctx context.Context, destination string, excludes ...string) (string, error) {
-	platform, err := containerregistry.ParsePlatform(o.platformRef)
-	if err != nil {
-		return "", err
-	}
-
-	opts := []name.Option{}
-	if !o.verify {
-		opts = append(opts, name.Insecure)
-	}
-
-	ref, err := name.ParseReference(o.imageRef, opts...)
-	if err != nil {
-		return "", err
-	}
-
-	fetch := func(ctx context.Context) (img containerregistry.Image, err error) {
-		err = backoff.Retry(func() error {
-			img, err = fetchImage(ctx, ref, *platform, o.local, o.verify)
-			return err
-		}, backoff.WithMaxRetries(backoff.NewConstantBackOff(3*time.Second), 3))
-		return img, err
-	}
-
-	var img containerregistry.Image
-
-	if o.cache != nil {
-		img, err = o.cache.Image(ctx, ref.Name(), *platform, fetch)
-	} else {
-		img, err = fetch(ctx)
-	}
+	img, err := o.Image(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -220,6 +191,39 @@ func (o OCI) unpack(ctx context.Context, destination string, excludes ...string)
 	_, err = containerd.Apply(ctx, destination, &r, excludesFilter(destination, excludes...))
 
 	return digest.String(), err
+}
+
+// Image returns the image of the configured platform without unpacking it. It is fetched from
+// the registry, or from the local container storage, and goes through the cache when one is set.
+func (o OCI) Image(ctx context.Context) (containerregistry.Image, error) {
+	platform, err := containerregistry.ParsePlatform(o.platformRef)
+	if err != nil {
+		return nil, err
+	}
+
+	opts := []name.Option{}
+	if !o.verify {
+		opts = append(opts, name.Insecure)
+	}
+
+	ref, err := name.ParseReference(o.imageRef, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	fetch := func(ctx context.Context) (img containerregistry.Image, err error) {
+		err = backoff.Retry(func() error {
+			img, err = fetchImage(ctx, ref, *platform, o.local, o.verify)
+			return err
+		}, backoff.WithMaxRetries(backoff.NewConstantBackOff(3*time.Second), 3))
+		return img, err
+	}
+
+	if o.cache != nil {
+		return o.cache.Image(ctx, ref.Name(), *platform, fetch)
+	}
+
+	return fetch(ctx)
 }
 
 func fetchImage(ctx context.Context, ref name.Reference, platform containerregistry.Platform, local bool, verify bool) (containerregistry.Image, error) {
