@@ -134,7 +134,7 @@ func (h *Helm) writeHelmCharts(butaneCfg *butane.Config, crds []*helm.CRD) ([]st
 		chartName := fmt.Sprintf("%s.yaml", crd.Metadata.Name)
 		relativePath := filepath.Join("/", h.RelativePath, chartName)
 
-		butaneCfg.AddFileInline(relativePath, new(string(data)), 0o644)
+		butaneCfg.AddFileInline(relativePath, new(string(data)), 0o600)
 
 		charts = append(charts, relativePath)
 	}
@@ -151,7 +151,7 @@ func (h *Helm) writeHelmSecrets(secrets []*helm.Secret, butaneCfg *butane.Config
 		}
 
 		secretName := fmt.Sprintf("%s-priority.yaml", secret.Metadata.Name)
-		butaneCfg.AddFileInline(filepath.Join("/", image.KubernetesManifestsPath(), secretName), new(string(data)), 0o644)
+		butaneCfg.AddFileInline(filepath.Join("/", image.KubernetesManifestsPath(), secretName), new(string(data)), 0o600)
 	}
 
 	return nil
@@ -213,9 +213,11 @@ func (h *Helm) evaluateLCMDeps(rm *resolver.ResolvedManifest, conf *image.Config
 
 	// check if LCM is defined in core manifest charts.
 	// if release.yaml doesn't list LCM, customize is should fail at validation level and never reach up to this point.
-	lcmChart = api.GetChart(elementalLifecycleManager, rm.CorePlatform.Components.Helm.Charts)
+	if rm.CorePlatform.Components.Helm != nil {
+		lcmChart = api.GetChart(elementalLifecycleManager, rm.CorePlatform.Components.Helm.Charts)
+	}
 	if lcmChart == nil {
-		return fmt.Errorf("\"elemental-lifecycle-manager\" not listed in release.yaml")
+		return fmt.Errorf("chart %q is not defined in the core platform release manifest", elementalLifecycleManager)
 	}
 
 	enabled := conf.Release.Components.HelmCharts

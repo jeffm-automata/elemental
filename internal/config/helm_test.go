@@ -650,6 +650,8 @@ spec:
 			data := findFileContentsInConfig(config, filepath.Join("/", image.KubernetesManifestsPath(), "apache-auth-priority.yaml"))
 			Expect(data).NotTo(BeNil())
 			Expect(*data).To(Equal(apacheAuthSecret))
+			Expect(findFileModeInConfig(config, filepath.Join("/", image.KubernetesManifestsPath(), "apache-auth-priority.yaml"))).To(HaveValue(Equal(0o600)))
+			Expect(findFileModeInConfig(config, "/helm/apache.yaml")).To(HaveValue(Equal(0o600)))
 
 			data = findFileContentsInConfig(config, filepath.Join("/", image.KubernetesManifestsPath(), "postgres-auth-priority.yaml"))
 			Expect(data).NotTo(BeNil())
@@ -1173,5 +1175,21 @@ webhook:
 				Expect(chart.DependsOn).ToNot(ContainElements(sucDep, cmDep))
 			})
 		})
+	})
+
+	It("fails when the core platform does not define LCM", func() {
+		conf.Release.Components.HelmCharts = []release.HelmChart{{Name: "elemental-lifecycle-manager"}}
+		rm.CorePlatform.Components.Helm.Charts = rm.CorePlatform.Components.Helm.Charts[1:]
+
+		err := h.evaluateLCMDeps(rm, conf)
+		Expect(err).To(MatchError(`chart "elemental-lifecycle-manager" is not defined in the core platform release manifest`))
+	})
+
+	It("fails when the core platform does not define any Helm charts", func() {
+		conf.Release.Components.HelmCharts = []release.HelmChart{{Name: "elemental-lifecycle-manager"}}
+		rm.CorePlatform.Components.Helm = nil
+
+		err := h.evaluateLCMDeps(rm, conf)
+		Expect(err).To(MatchError(`chart "elemental-lifecycle-manager" is not defined in the core platform release manifest`))
 	})
 })
