@@ -247,7 +247,22 @@ func fetchImage(ctx context.Context, ref name.Reference, platform containerregis
 
 func (o OCI) synchedUnpackContainerd(ctx context.Context, destination string, excludes []string, deleteExcludes []string) (string, error) {
 	callback := func(rootfs string) error {
-		unpackD := NewDirectoryUnpacker(o.s, rootfs, WithRsyncFlagsDir(o.rsyncFlags...))
+		flags := o.rsyncFlags
+		// The image is unpacked in containerd, usually on the file system of the destination: take its files by
+		// reflink instead of reading both trees to compare them. Only for the default flags, which compare checksums.
+		if len(flags) == 0 && reflinkSyncEnabled() {
+			start := time.Now()
+			if ok, stats := reflinkPrepare(ctx, o.s, rootfs, destination, excludes, ficlone); ok {
+				o.s.Logger().Info(
+					"Image files taken by reflink: %d cloned, %d left to copy, in %s; synchronizing the rest without checksums",
+					stats.Cloned, stats.Dropped, time.Since(start).Round(time.Millisecond),
+				)
+				flags = quickCheckFlags()
+			} else {
+				o.s.Logger().Info("Image files cannot be taken by reflink, synchronizing with checksums")
+			}
+		}
+		unpackD := NewDirectoryUnpacker(o.s, rootfs, WithRsyncFlagsDir(flags...))
 		_, e := unpackD.SynchedUnpack(ctx, destination, excludes, deleteExcludes)
 		return e
 	}
