@@ -72,6 +72,7 @@ const (
 
 	liveBootPath       = "/boot"
 	grubEnvFile        = "grubenv"
+	nextEntryVar       = "next_entry"
 	netbootDisplayName = "Elemental"
 )
 
@@ -157,6 +158,9 @@ func (g *Grub) InstallLive(i InstallCtx) error {
 
 // Install installs the bootloader to the specified root.
 func (g *Grub) Install(i InstallCtx) error {
+	// Somebody may have chosen what the next boot starts; read it before the environment block is touched.
+	nextEntrySet := g.nextEntrySet(i.Target)
+
 	err := g.installElementalEFI(i.RootDir, i.Target, i.ESPLabel)
 	if err != nil {
 		return fmt.Errorf("installing elemental EFI apps: %w", err)
@@ -204,7 +208,38 @@ func (g *Grub) Install(i InstallCtx) error {
 		return fmt.Errorf("updating boot entries: %w", err)
 	}
 
+	if i.SkipMenuOnce && !nextEntrySet {
+		err = g.skipMenuOnce(i.Target)
+		if err != nil {
+			return fmt.Errorf("setting the entry of the next boot: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// nextEntrySet tells whether the environment block of the given ESP names an entry for the next boot.
+func (g *Grub) nextEntrySet(espDir string) bool {
+	grubEnvPath := filepath.Join(espDir, grubEnvFile)
+	if ok, _ := vfs.Exists(g.s.FS(), grubEnvPath); !ok {
+		return false
+	}
+	grubEnv, err := g.readGrubEnv(grubEnvPath)
+	if err != nil {
+		// Unknown: do not overwrite what may be there.
+		return true
+	}
+	return grubEnv[nextEntryVar] != ""
+}
+
+// skipMenuOnce names the default entry as the entry of the next boot. The boot loader configuration starts such an
+// entry without the menu wait and clears the variable, so that this applies to one boot only.
+func (g *Grub) skipMenuOnce(espDir string) error {
+	g.s.Logger().Info("Next boot starts the '%s' entry without the boot menu wait", DefaultBootID)
+	grubEnvPath := filepath.Join(espDir, grubEnvFile)
+	stdOut, err := g.s.Runner().Run("grub2-editenv", grubEnvPath, "set", fmt.Sprintf("%s=%s", nextEntryVar, DefaultBootID))
+	g.s.Logger().Debug("grub2-editenv stdout: %s", string(stdOut))
+	return err
 }
 
 // Prune prunes old boot entries and artifacts not in the passed in keepSnapshotIDs.

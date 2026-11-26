@@ -57,6 +57,10 @@ type InstallCtx struct {
 	// InitrdExtensions is the list of CPIO files to stack into the stock initrd. These CPIO files are mostly
 	// used to inject additional setup into the stock initrd.
 	InitrdExtensions []string
+
+	// SkipMenuOnce makes the next boot start the installed entry without waiting at the boot menu. It is meant for
+	// the reboot that follows an upgrade, which nobody watches; every later boot shows the menu again.
+	SkipMenuOnce bool
 }
 
 const (
