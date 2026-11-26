@@ -156,7 +156,12 @@ func (u Upgrader) Upgrade(d *deployment.Deployment) (err error) {
 	// new policy. That walks every file of every volume in the initrd, so it is only asked for if the new policy
 	// could label a file differently.
 	var relabelOpts []selinux.RelabelOpt
-	if trans.BasePath != "" {
+	// An overlay tree and a configuration hook write into the snapshot after it is labelled; the relabel at boot is
+	// what labels their files.
+	writesAfterLabelling := (d.OverlayTree != nil && !d.OverlayTree.IsEmpty()) || d.CfgScript != ""
+	if writesAfterLabelling {
+		u.s.Logger().Info("Shared RW paths are relabelled at the next boot: an overlay tree or a configuration hook is applied")
+	} else if trans.BasePath != "" {
 		if valid, reason := selinux.SharedLabelsStillValid(u.s, trans.BasePath, trans.Path); valid {
 			u.s.Logger().Info("SE Linux file contexts did not change, shared RW paths keep their labels")
 			relabelOpts = append(relabelOpts, selinux.WithoutAutoRelabel())
