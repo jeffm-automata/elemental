@@ -188,18 +188,82 @@ var _ = Describe("Selinux", Label("selinux"), func() {
 		Expect(selinux.SystemRelabel(
 			context.Background(), s, root, nil, []string{root + "/var"}, selinux.WithoutAutoRelabel()),
 		).To(Succeed())
-		// the shared path is still not relabelled by the upgrade itself
+		// the shared path is labelled by the upgrade itself then, without force and after the root tree
 		Expect(runner.CmdsMatch([][]string{{
 			"setfiles", "-i", "-r", "/some/root", "-F", "-e", "/some/root/var",
 			"/some/root/etc/selinux/targeted/contexts/files/file_contexts", "/some/root",
+		}, {
+			"setfiles", "-i", "-r", "/some/root",
+			"/some/root/etc/selinux/targeted/contexts/files/file_contexts", "/some/root/var",
 		}})).To(Succeed())
 		Expect(vfs.Exists(s.FS(), autorelabel)).To(BeFalse())
+		Expect(buffer.String()).To(ContainSubstring("Applying SE Linux labels to shared RW paths"))
+		runner.ClearCmds()
 
 		// nothing to withdraw is fine too
 		Expect(selinux.SystemRelabel(
 			context.Background(), s, root, nil, []string{root + "/var"}, selinux.WithoutAutoRelabel()),
 		).To(Succeed())
 		Expect(vfs.Exists(s.FS(), autorelabel)).To(BeFalse())
+	})
+	It("labels every shared path in one pass when no relabel at boot is asked for, snapshotted paths before", func() {
+		Expect(fs.WriteFile(contextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+		Expect(vfs.MkdirAll(fs, root+"/etc/.snapshots", vfs.DirPerm)).To(Succeed())
+		Expect(selinux.SystemRelabel(
+			context.Background(), s, root, []string{root + "/etc"}, []string{root + "/var", root + "/opt"},
+			selinux.WithoutAutoRelabel()),
+		).To(Succeed())
+		Expect(runner.CmdsMatch([][]string{{
+			"setfiles", "-i", "-r", "/some/root", "-F", "-e", "/some/root/etc", "-e", "/some/root/var", "-e", "/some/root/opt",
+			"/some/root/etc/selinux/targeted/contexts/files/file_contexts", "/some/root",
+		}, {
+			"setfiles", "-i", "-r", "/some/root",
+			"/some/root/etc/selinux/targeted/contexts/files/file_contexts", "/some/root/etc", "/some/root/etc/.snapshots",
+		}, {
+			"setfiles", "-i", "-r", "/some/root",
+			"/some/root/etc/selinux/targeted/contexts/files/file_contexts", "/some/root/var", "/some/root/opt",
+		}})).To(Succeed())
+		// never forced: customized labels in shared paths stay
+		cmds := runner.GetCmds()
+		Expect(cmds[2]).NotTo(ContainElement("-F"))
+		Expect(vfs.Exists(s.FS(), filepath.Join(root, "/etc/selinux/.autorelabel"))).To(BeFalse())
+	})
+	It("does not label shared paths itself when the relabel at boot is asked for", func() {
+		Expect(fs.WriteFile(contextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+		Expect(selinux.SystemRelabel(
+			context.Background(), s, root, []string{root + "/etc"}, []string{root + "/var"}),
+		).To(Succeed())
+		Expect(runner.GetCmds()).To(HaveLen(2))
+		Expect(buffer.String()).NotTo(ContainSubstring("Applying SE Linux labels to shared RW paths"))
+		Expect(vfs.Exists(s.FS(), filepath.Join(root, "/etc/selinux/.autorelabel"))).To(BeTrue())
+	})
+	It("asks for the relabel at boot after all if the shared paths cannot be labelled", func() {
+		Expect(fs.WriteFile(contextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+		runner.SideEffect = func(cmd string, args ...string) ([]byte, error) {
+			if cmd == "setfiles" && args[len(args)-1] == root+"/var" {
+				return []byte{}, fmt.Errorf("setfiles failed on a shared path")
+			}
+			return []byte{}, nil
+		}
+		autorelabel := filepath.Join(root, "/etc/selinux/.autorelabel")
+		Expect(selinux.SystemRelabel(
+			context.Background(), s, root, nil, []string{root + "/var"}, selinux.WithoutAutoRelabel()),
+		).To(Succeed())
+		Expect(vfs.Exists(s.FS(), autorelabel)).To(BeTrue())
+		Expect(buffer.String()).To(ContainSubstring("they are relabelled at the next boot"))
+	})
+	It("fails without touching shared paths if the root tree cannot be labelled", func() {
+		Expect(fs.WriteFile(contextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+		runner.SideEffect = func(cmd string, args ...string) ([]byte, error) {
+			if cmd == "setfiles" && args[len(args)-1] == root {
+				return []byte{}, fmt.Errorf("setfiles failed on the root")
+			}
+			return []byte{}, nil
+		}
+		Expect(selinux.SystemRelabel(
+			context.Background(), s, root, nil, []string{root + "/var"}, selinux.WithoutAutoRelabel()),
+		).To(MatchError(ContainSubstring("setfiles failed on the root")))
+		Expect(runner.GetCmds()).To(HaveLen(1))
 	})
 	Describe("labels of shared paths", func() {
 		const oldRoot = "/old/root"

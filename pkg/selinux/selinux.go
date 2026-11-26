@@ -57,7 +57,9 @@ type RelabelOpt func(*relabelOpts)
 
 // WithoutAutoRelabel makes SystemRelabel not ask for a relabel of the shared RW paths at the next boot, and withdraw
 // such a request if the tree has one. It is for trees whose file contexts are the ones the shared paths are labelled
-// with already, see SharedLabelsStillValid.
+// with already, see SharedLabelsStillValid. SystemRelabel then applies the labels to the shared RW paths itself,
+// without force, so that an upgrade leaves them as the relabel at boot would have; if that fails the relabel at
+// boot is asked for after all.
 func WithoutAutoRelabel() RelabelOpt {
 	return func(o *relabelOpts) { o.noAutoRelabel = true }
 }
@@ -117,7 +119,8 @@ func SharedLabelsStillValid(s *sys.System, oldRoot, newRoot string) (bool, strin
 // processes. For snapshotted RW paths it applies SE Linux labels without force flag as it might include
 // customized content merged with stock OS content.
 // If at least one shared RW path is provided it also sets the .autorelabel file to trigger
-// relabelling at boot and relabel the excluded paths, unless WithoutAutoRelabel is given.
+// relabelling at boot and relabel the excluded paths, unless WithoutAutoRelabel is given: then the shared
+// RW paths are labelled in place, without force.
 func SystemRelabel(ctx context.Context, s *sys.System, rootDir string, snapshotted []string, shared []string, opts ...RelabelOpt) error {
 	o := &relabelOpts{}
 	for _, opt := range opts {
@@ -183,14 +186,40 @@ func SystemRelabel(ctx context.Context, s *sys.System, rootDir string, snapshott
 				// left alone.
 				snapshotsDir := filepath.Join(path, snapshotsDirName)
 				if ok, _ := vfs.IsDir(s.FS(), snapshotsDir); ok {
+					s.Logger().Debug("Snapshots subvolume '%s' is relabelled as a path of its own", snapshotsDir)
 					paths = append(paths, snapshotsDir)
 				}
 				err = s.Runner().RunContextParseOutput(ctx, stdHander(stdOut), stdHander(stdErr), "setfiles", slices.Concat(baseArgs, []string{contextFile}, paths)...)
 				logOutput(s, stdOut, stdErr)
 			}
 		}
+		if err != nil {
+			return err
+		}
 
-		return err
+		if o.noAutoRelabel && len(shared) > 0 {
+			// Without the relabel at boot nothing else would label what was written to a shared RW path with
+			// another label than the policy assigns, e.g. software unpacked there after the first boot. The file
+			// contexts are the ones of the running system (that is the condition for WithoutAutoRelabel), so
+			// the labels can be applied now: no force, as the relabel at boot did, and only files whose label
+			// is not the policy's and not a customizable one change.
+			s.Logger().Info("Applying SE Linux labels to shared RW paths, in place of the relabel at boot")
+			stdOut = ring.New(debugLines)
+			stdErr = ring.New(debugLines)
+			sErr := s.Runner().RunContextParseOutput(ctx, stdHander(stdOut), stdHander(stdErr), "setfiles", slices.Concat(baseArgs, []string{contextFile}, shared)...)
+			logOutput(s, stdOut, stdErr)
+			if sErr != nil {
+				s.Logger().Warn("Could not label the shared RW paths, they are relabelled at the next boot: %v", sErr)
+				err = s.FS().WriteFile(filepath.Join(rootDir, selinuxAutoRelabel), []byte{}, vfs.FilePerm)
+				if err != nil {
+					return fmt.Errorf("creating .autorelabel file: %w", err)
+				}
+			} else {
+				s.Logger().Info("Shared RW paths are labelled")
+			}
+		}
+
+		return nil
 	}
 
 	s.Logger().Warn("Not relabelling SE Linux, no context found")
