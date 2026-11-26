@@ -18,11 +18,13 @@ limitations under the License.
 package selinux
 
 import (
+	"bytes"
 	"container/ring"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -39,8 +41,74 @@ const (
 	defaultStoreRoot    = "/var/lib/selinux"
 	selinuxTargetedPath = "/etc/selinux/" + SelinuxTargetedPolicyType
 	selinuxAutoRelabel  = "/etc/selinux/.autorelabel"
+	selinuxRelabelled   = "/etc/selinux/.relabelled"
+	selinuxConfig       = "/etc/selinux/config"
+	selinuxContextsDir  = selinuxTargetedPath + "/contexts/files"
 	debugLines          = 10
 )
+
+type relabelOpts struct {
+	noAutoRelabel bool
+}
+
+// RelabelOpt changes what SystemRelabel does.
+type RelabelOpt func(*relabelOpts)
+
+// WithoutAutoRelabel makes SystemRelabel not ask for a relabel of the shared RW paths at the next boot, and withdraw
+// such a request if the tree has one. It is for trees whose file contexts are the ones the shared paths are labelled
+// with already, see SharedLabelsStillValid.
+func WithoutAutoRelabel() RelabelOpt {
+	return func(o *relabelOpts) { o.noAutoRelabel = true }
+}
+
+// SharedLabelsStillValid tells whether the shared RW paths of a running system, which were labelled by the policy in
+// oldRoot, need no relabelling for the policy in newRoot. That is the case if
+//   - a relabel at boot has completed on the old system and none is pending there, and
+//   - the SE Linux configuration and every file context definition of the targeted policy are the same in both
+//     trees (the compiled .bin companions are not compared: they are derived from the definitions).
+//
+// If so the labels the new policy would assign are the ones the old policy assigned. Anything that cannot be read or
+// is missing counts as a difference; the reason is returned for the log.
+func SharedLabelsStillValid(s *sys.System, oldRoot, newRoot string) (bool, string) {
+	if ok, _ := vfs.Exists(s.FS(), filepath.Join(oldRoot, selinuxAutoRelabel)); ok {
+		return false, "a relabel is pending on the running system"
+	}
+	if ok, _ := vfs.Exists(s.FS(), filepath.Join(oldRoot, selinuxRelabelled)); !ok {
+		return false, "no completed relabel is recorded on the running system"
+	}
+
+	names := map[string]bool{}
+	for _, root := range []string{oldRoot, newRoot} {
+		entries, err := s.FS().ReadDir(filepath.Join(root, selinuxContextsDir))
+		if err != nil {
+			return false, fmt.Sprintf("reading file contexts: %s", err.Error())
+		}
+		for _, entry := range entries {
+			if entry.Type().IsRegular() && !strings.HasSuffix(entry.Name(), ".bin") {
+				names[filepath.Join(selinuxContextsDir, entry.Name())] = true
+			}
+		}
+	}
+	if !names[SelinuxTargetedContextFile] {
+		return false, "no file contexts found"
+	}
+	names[selinuxConfig] = true
+
+	for _, name := range slices.Sorted(maps.Keys(names)) {
+		oldData, err := s.FS().ReadFile(filepath.Join(oldRoot, name))
+		if err != nil {
+			return false, fmt.Sprintf("'%s' of the running system: %s", name, err.Error())
+		}
+		newData, err := s.FS().ReadFile(filepath.Join(newRoot, name))
+		if err != nil {
+			return false, fmt.Sprintf("'%s' of the new system: %s", name, err.Error())
+		}
+		if !bytes.Equal(oldData, newData) {
+			return false, fmt.Sprintf("'%s' changed", name)
+		}
+	}
+	return true, ""
+}
 
 // SystemRelabel applies the SE Linux labels based on the targeted policy found within the given
 // root path. It force applies the labels under the given root except for the given shared RW paths.
@@ -48,8 +116,12 @@ const (
 // processes. For snapshotted RW paths it applies SE Linux labels without force flag as it might include
 // customized content merged with stock OS content.
 // If at least one shared RW path is provided it also sets the .autorelabel file to trigger
-// relabelling at boot and relabel the excluded paths.
-func SystemRelabel(ctx context.Context, s *sys.System, rootDir string, snapshotted []string, shared []string) error {
+// relabelling at boot and relabel the excluded paths, unless WithoutAutoRelabel is given.
+func SystemRelabel(ctx context.Context, s *sys.System, rootDir string, snapshotted []string, shared []string, opts ...RelabelOpt) error {
+	o := &relabelOpts{}
+	for _, opt := range opts {
+		opt(o)
+	}
 	contextFile := filepath.Join(rootDir, SelinuxTargetedContextFile)
 	contextExists, _ := vfs.Exists(s.FS(), contextFile)
 
@@ -78,9 +150,18 @@ func SystemRelabel(ctx context.Context, s *sys.System, rootDir string, snapshott
 			for _, path := range shared {
 				args = append(args, "-e", path)
 			}
-			err = s.FS().WriteFile(filepath.Join(rootDir, selinuxAutoRelabel), []byte{}, vfs.FilePerm)
-			if err != nil {
-				return fmt.Errorf("creating .autorelabel file: %w", err)
+			autoRelabel := filepath.Join(rootDir, selinuxAutoRelabel)
+			if o.noAutoRelabel {
+				s.Logger().Info("Not requesting a relabel of shared RW paths at boot")
+				err = s.FS().Remove(autoRelabel)
+				if err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return fmt.Errorf("removing .autorelabel file: %w", err)
+				}
+			} else {
+				err = s.FS().WriteFile(autoRelabel, []byte{}, vfs.FilePerm)
+				if err != nil {
+					return fmt.Errorf("creating .autorelabel file: %w", err)
+				}
 			}
 		}
 		args = append(args, contextFile, rootDir)
@@ -108,8 +189,8 @@ func SystemRelabel(ctx context.Context, s *sys.System, rootDir string, snapshott
 
 // ChrootedSystemRelabel applies the SE Linux labels based on the targeted policy found within the given
 // root path. Runs the same logic as RelabelSystem method but running inside a chroot environment.
-func ChrootedSystemRelabel(ctx context.Context, s *sys.System, rootDir string, snapshotted []string, shared []string) error {
-	callback := func() error { return SystemRelabel(ctx, s, "/", snapshotted, shared) }
+func ChrootedSystemRelabel(ctx context.Context, s *sys.System, rootDir string, snapshotted []string, shared []string, opts ...RelabelOpt) error {
+	callback := func() error { return SystemRelabel(ctx, s, "/", snapshotted, shared, opts...) }
 	err := chroot.ChrootedCallback(s, rootDir, nil, callback, chroot.WithoutDefaultBinds())
 	if err != nil {
 		return fmt.Errorf("chrooted system relabel: %w", err)
