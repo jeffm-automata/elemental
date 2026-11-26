@@ -92,6 +92,43 @@ var _ = Describe("Selinux", Label("selinux"), func() {
 		}})).To(Succeed())
 		Expect(vfs.Exists(s.FS(), filepath.Join(root, "/etc/selinux/.autorelabel"))).To(BeFalse())
 	})
+	It("names the nested snapshots subvolume of a snapshotted path, which setfiles would not cross into", func() {
+		Expect(fs.WriteFile(contextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+		Expect(vfs.MkdirAll(fs, root+"/etc/.snapshots/1/snapshot", vfs.DirPerm)).To(Succeed())
+		Expect(vfs.MkdirAll(fs, root+"/home", vfs.DirPerm)).To(Succeed())
+		Expect(selinux.SystemRelabel(context.Background(), s, root, []string{root + "/etc", root + "/home"}, nil)).To(Succeed())
+		Expect(runner.CmdsMatch([][]string{{
+			"setfiles", "-i", "-r", "/some/root", "-F", "-e", "/some/root/etc", "-e", "/some/root/home",
+			"/some/root/etc/selinux/targeted/contexts/files/file_contexts", "/some/root",
+		}, {
+			// the snapshots directory is a path of its own; the snapshots inside it are not named
+			"setfiles", "-i", "-r", "/some/root",
+			"/some/root/etc/selinux/targeted/contexts/files/file_contexts", "/some/root/etc", "/some/root/etc/.snapshots",
+		}, {
+			// a snapshotted path without snapshots directory is relabelled as before
+			"setfiles", "-i", "-r", "/some/root",
+			"/some/root/etc/selinux/targeted/contexts/files/file_contexts", "/some/root/home",
+		}})).To(Succeed())
+		// CmdsMatch compares prefixes: nothing may follow the path of a volume without snapshots directory
+		cmds := runner.GetCmds()
+		Expect(cmds[2][len(cmds[2])-1]).To(Equal("/some/root/home"))
+		Expect(vfs.Exists(s.FS(), filepath.Join(root, "/etc/selinux/.autorelabel"))).To(BeFalse())
+	})
+	It("does not take a file called .snapshots for a snapshots subvolume", func() {
+		Expect(fs.WriteFile(contextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+		Expect(fs.WriteFile(root+"/etc/.snapshots", []byte{}, vfs.FilePerm)).To(Succeed())
+		Expect(selinux.SystemRelabel(context.Background(), s, root, []string{root + "/etc"}, nil)).To(Succeed())
+		Expect(runner.CmdsMatch([][]string{{
+			"setfiles", "-i", "-r", "/some/root", "-F", "-e", "/some/root/etc",
+			"/some/root/etc/selinux/targeted/contexts/files/file_contexts", "/some/root",
+		}, {
+			"setfiles", "-i", "-r", "/some/root",
+			"/some/root/etc/selinux/targeted/contexts/files/file_contexts", "/some/root/etc",
+		}})).To(Succeed())
+		// CmdsMatch compares prefixes: the path must be the last argument
+		cmds := runner.GetCmds()
+		Expect(cmds[1][len(cmds[1])-1]).To(Equal("/some/root/etc"))
+	})
 	It("relabels the given path for the targeted context, including shared paths sets the .autorelabel file", func() {
 		Expect(fs.WriteFile(contextFile, []byte{}, vfs.FilePerm)).To(Succeed())
 		Expect(selinux.SystemRelabel(context.Background(), s, root, nil, []string{root + "/var"})).To(Succeed())
@@ -127,6 +164,20 @@ var _ = Describe("Selinux", Label("selinux"), func() {
 		Expect(runner.CmdsMatch([][]string{
 			{"setfiles", "-i", "-F", "-e", "/etc", "-e", "/var", "/etc/selinux/targeted/contexts/files/file_contexts", "/"},
 			{"setfiles", "-i", "/etc/selinux/targeted/contexts/files/file_contexts", "/etc"},
+			{"sync"},
+		})).To(Succeed())
+	})
+	It("names the nested snapshots subvolume of a snapshotted path in a chroot env", func() {
+		Expect(fs.WriteFile(selinux.SelinuxTargetedContextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+		Expect(fs.WriteFile(contextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+		Expect(vfs.MkdirAll(fs, "/partition/var", vfs.DirPerm)).To(Succeed())
+		Expect(vfs.MkdirAll(fs, "/etc/.snapshots", vfs.DirPerm)).To(Succeed())
+		Expect(selinux.ChrootedSystemRelabel(
+			context.Background(), s, root, []string{"/etc"}, []string{"/var"}),
+		).To(Succeed())
+		Expect(runner.CmdsMatch([][]string{
+			{"setfiles", "-i", "-F", "-e", "/etc", "-e", "/var", "/etc/selinux/targeted/contexts/files/file_contexts", "/"},
+			{"setfiles", "-i", "/etc/selinux/targeted/contexts/files/file_contexts", "/etc", "/etc/.snapshots"},
 			{"sync"},
 		})).To(Succeed())
 	})

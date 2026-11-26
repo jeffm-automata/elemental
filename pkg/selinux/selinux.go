@@ -39,6 +39,7 @@ const (
 	defaultStoreRoot    = "/var/lib/selinux"
 	selinuxTargetedPath = "/etc/selinux/" + SelinuxTargetedPolicyType
 	selinuxAutoRelabel  = "/etc/selinux/.autorelabel"
+	snapshotsDirName    = ".snapshots"
 	debugLines          = 10
 )
 
@@ -94,7 +95,16 @@ func SystemRelabel(ctx context.Context, s *sys.System, rootDir string, snapshott
 			for _, path := range snapshotted {
 				stdOut = ring.New(debugLines)
 				stdErr = ring.New(debugLines)
-				err = s.Runner().RunContextParseOutput(ctx, stdHander(stdOut), stdHander(stdErr), "setfiles", append(baseArgs, contextFile, path)...)
+				paths := []string{path}
+				// The snapshots of a snapshotted RW volume are kept in a nested subvolume. setfiles does not
+				// cross into another subvolume, and nothing mounts this one, so a relabel at boot does not
+				// reach it either: it has to be named. The snapshots inside it are subvolumes again and are
+				// left alone.
+				snapshotsDir := filepath.Join(path, snapshotsDirName)
+				if ok, _ := vfs.IsDir(s.FS(), snapshotsDir); ok {
+					paths = append(paths, snapshotsDir)
+				}
+				err = s.Runner().RunContextParseOutput(ctx, stdHander(stdOut), stdHander(stdErr), "setfiles", slices.Concat(baseArgs, []string{contextFile}, paths)...)
 				logOutput(s, stdOut, stdErr)
 			}
 		}
