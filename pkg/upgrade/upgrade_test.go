@@ -237,6 +237,9 @@ var _ = Describe("Upgrade", Label("upgrade"), func() {
 			}
 			write("/old/snapshot", "/etc/selinux/.relabelled", "")
 			trans.BasePath = "/old/snapshot"
+			// an upgrade as the Lifecycle Manager runs it: the OS image only
+			d.OverlayTree = nil
+			d.CfgScript = ""
 		})
 		It("is not requested if the file contexts did not change", func() {
 			Expect(u.Upgrade(d)).To(Succeed())
@@ -249,6 +252,16 @@ var _ = Describe("Upgrade", Label("upgrade"), func() {
 		})
 		It("is requested if the transaction has no previous system", func() {
 			trans.BasePath = ""
+			Expect(u.Upgrade(d)).To(Succeed())
+			Expect(vfs.Exists(fs, autorelabel)).To(BeTrue())
+		})
+		It("is requested if an overlay tree is applied, which is not labelled by the upgrade", func() {
+			d.OverlayTree = deployment.NewDirSrc("/opt/overlaytree")
+			Expect(u.Upgrade(d)).To(Succeed())
+			Expect(vfs.Exists(fs, autorelabel)).To(BeTrue())
+		})
+		It("is requested if a configuration hook runs, which is not labelled by the upgrade", func() {
+			d.CfgScript = "/opt/config.sh"
 			Expect(u.Upgrade(d)).To(Succeed())
 			Expect(vfs.Exists(fs, autorelabel)).To(BeTrue())
 		})
