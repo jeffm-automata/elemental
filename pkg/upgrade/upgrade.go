@@ -152,8 +152,21 @@ func (u Upgrader) Upgrade(d *deployment.Deployment) (err error) {
 		return fmt.Errorf("refreshing SE Linux policy: %w", err)
 	}
 
+	// The shared RW paths are in use and keep the labels of the running system; the next boot relabels them for the
+	// new policy. That walks every file of every volume in the initrd, so it is only asked for if the new policy
+	// could label a file differently.
+	var relabelOpts []selinux.RelabelOpt
+	if trans.BasePath != "" {
+		if valid, reason := selinux.SharedLabelsStillValid(u.s, trans.BasePath, trans.Path); valid {
+			u.s.Logger().Info("SE Linux file contexts did not change, shared RW paths keep their labels")
+			relabelOpts = append(relabelOpts, selinux.WithoutAutoRelabel())
+		} else {
+			u.s.Logger().Info("Shared RW paths are relabelled at the next boot: %s", reason)
+		}
+	}
+
 	shared, snapshotted := parsePersistentPaths(d)
-	err = selinux.ChrootedSystemRelabel(u.ctx, u.s, trans.Path, snapshotted, shared)
+	err = selinux.ChrootedSystemRelabel(u.ctx, u.s, trans.Path, snapshotted, shared, relabelOpts...)
 	if err != nil {
 		return fmt.Errorf("relabelling snapshot path '%s': %w", trans.Path, err)
 	}

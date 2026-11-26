@@ -487,7 +487,7 @@ func (sn snapperT) preparePartitions(baseID int, trans *Transaction) error {
 // assumes it will be creating the first snapshot.
 func (sn snapperT) createNewSnapshot(baseID int) (*Transaction, error) {
 	var newID int
-	var path string
+	var path, basePath string
 	var err error
 
 	if baseID == 0 {
@@ -503,12 +503,14 @@ func (sn snapperT) createNewSnapshot(baseID int) (*Transaction, error) {
 			return nil, err
 		}
 		path = filepath.Join(sn.rootDir, fmt.Sprintf(snapshotPathTmpl, newID))
+		basePath = filepath.Join(sn.rootDir, fmt.Sprintf(snapshotPathTmpl, baseID))
 	}
 
 	return &Transaction{
-		ID:     newID,
-		Path:   path,
-		Merges: map[string]*Merge{},
-		status: started,
+		ID:       newID,
+		Path:     path,
+		BasePath: basePath,
+		Merges:   map[string]*Merge{},
+		status:   started,
 	}, nil
 }

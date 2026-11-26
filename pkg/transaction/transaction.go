@@ -55,9 +55,12 @@ type Merge struct {
 }
 
 type Transaction struct {
-	ID     int
-	Path   string
-	Merges map[string]*Merge
+	ID   int
+	Path string
+	// BasePath is the root of the snapshot the transaction started from, the system that is upgraded. It is
+	// empty for a first installation and for transactions that have no such tree.
+	BasePath string
+	Merges   map[string]*Merge
 
 	status transactionState
 }

@@ -20,6 +20,7 @@ package upgrade_test
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -219,6 +220,43 @@ var _ = Describe("Upgrade", Label("upgrade"), func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err).To(MatchError("committing transaction: commit failed"))
 		Expect(t.RollbackCalled()).To(BeTrue())
+	})
+	Describe("relabel of shared paths at the next boot", func() {
+		const contexts = "/etc/selinux/targeted/contexts/files"
+		const autorelabel = "/etc/selinux/.autorelabel"
+		write := func(tree, name, content string) {
+			path := filepath.Join(tree, name)
+			Expect(vfs.MkdirAll(fs, filepath.Dir(path), vfs.DirPerm)).To(Succeed())
+			Expect(fs.WriteFile(path, []byte(content), vfs.FilePerm)).To(Succeed())
+		}
+		BeforeEach(func() {
+			// The chroot of the test does not change the root: the labelled tree is "/".
+			for _, tree := range []string{"/", "/old/snapshot", trans.Path} {
+				write(tree, contexts+"/file_contexts", "contexts")
+				write(tree, "/etc/selinux/config", "SELINUXTYPE=targeted")
+			}
+			write("/old/snapshot", "/etc/selinux/.relabelled", "")
+			trans.BasePath = "/old/snapshot"
+		})
+		It("is not requested if the file contexts did not change", func() {
+			Expect(u.Upgrade(d)).To(Succeed())
+			Expect(vfs.Exists(fs, autorelabel)).To(BeFalse())
+		})
+		It("is requested if the file contexts changed", func() {
+			write(trans.Path, contexts+"/file_contexts", "other contexts")
+			Expect(u.Upgrade(d)).To(Succeed())
+			Expect(vfs.Exists(fs, autorelabel)).To(BeTrue())
+		})
+		It("is requested if the transaction has no previous system", func() {
+			trans.BasePath = ""
+			Expect(u.Upgrade(d)).To(Succeed())
+			Expect(vfs.Exists(fs, autorelabel)).To(BeTrue())
+		})
+		It("is requested while the running system waits for a relabel itself", func() {
+			write("/old/snapshot", autorelabel, "")
+			Expect(u.Upgrade(d)).To(Succeed())
+			Expect(vfs.Exists(fs, autorelabel)).To(BeTrue())
+		})
 	})
 	It("creates an efi boot entry", func() {
 		efiBootMgrCalled := false

@@ -181,6 +181,97 @@ var _ = Describe("Selinux", Label("selinux"), func() {
 			{"sync"},
 		})).To(Succeed())
 	})
+	It("does not ask for a relabel at boot, and withdraws a request, when told so", func() {
+		Expect(fs.WriteFile(contextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+		autorelabel := filepath.Join(root, "/etc/selinux/.autorelabel")
+		Expect(fs.WriteFile(autorelabel, []byte{}, vfs.FilePerm)).To(Succeed())
+		Expect(selinux.SystemRelabel(
+			context.Background(), s, root, nil, []string{root + "/var"}, selinux.WithoutAutoRelabel()),
+		).To(Succeed())
+		// the shared path is still not relabelled by the upgrade itself
+		Expect(runner.CmdsMatch([][]string{{
+			"setfiles", "-i", "-r", "/some/root", "-F", "-e", "/some/root/var",
+			"/some/root/etc/selinux/targeted/contexts/files/file_contexts", "/some/root",
+		}})).To(Succeed())
+		Expect(vfs.Exists(s.FS(), autorelabel)).To(BeFalse())
+
+		// nothing to withdraw is fine too
+		Expect(selinux.SystemRelabel(
+			context.Background(), s, root, nil, []string{root + "/var"}, selinux.WithoutAutoRelabel()),
+		).To(Succeed())
+		Expect(vfs.Exists(s.FS(), autorelabel)).To(BeFalse())
+	})
+	Describe("labels of shared paths", func() {
+		const oldRoot = "/old/root"
+		const contexts = "/etc/selinux/targeted/contexts/files"
+		write := func(tree, name, content string) {
+			path := filepath.Join(tree, name)
+			Expect(vfs.MkdirAll(fs, filepath.Dir(path), vfs.DirPerm)).To(Succeed())
+			Expect(fs.WriteFile(path, []byte(content), vfs.FilePerm)).To(Succeed())
+		}
+		BeforeEach(func() {
+			for _, tree := range []string{oldRoot, root} {
+				write(tree, contexts+"/file_contexts", "/var(/.*)? system_u:object_r:var_t:s0\n")
+				write(tree, contexts+"/file_contexts.homedirs", "homedirs")
+				write(tree, contexts+"/file_contexts.subs_dist", "subs")
+				write(tree, "/etc/selinux/config", "SELINUX=enforcing\nSELINUXTYPE=targeted\n")
+			}
+			write(oldRoot, "/etc/selinux/.relabelled", "")
+		})
+		It("are still valid if no context definition changed", func() {
+			// compiled companions are derived, they may differ
+			write(oldRoot, contexts+"/file_contexts.bin", "compiled by the old tools")
+			write(root, contexts+"/file_contexts.bin", "compiled by the new tools")
+			valid, reason := selinux.SharedLabelsStillValid(s, oldRoot, root)
+			Expect(reason).To(BeEmpty())
+			Expect(valid).To(BeTrue())
+		})
+		It("are not valid if a context definition changed", func() {
+			write(root, contexts+"/file_contexts", "/var(/.*)? system_u:object_r:other_t:s0\n")
+			valid, reason := selinux.SharedLabelsStillValid(s, oldRoot, root)
+			Expect(valid).To(BeFalse())
+			Expect(reason).To(ContainSubstring("file_contexts' changed"))
+		})
+		It("are not valid if the new system has a definition file the old one has not, or the reverse", func() {
+			write(root, contexts+"/file_contexts.local", "/srv/x system_u:object_r:var_t:s0\n")
+			valid, reason := selinux.SharedLabelsStillValid(s, oldRoot, root)
+			Expect(valid).To(BeFalse())
+			Expect(reason).To(ContainSubstring("file_contexts.local' of the running system"))
+
+			Expect(fs.Remove(filepath.Join(root, contexts, "file_contexts.local"))).To(Succeed())
+			Expect(fs.Remove(filepath.Join(root, contexts, "file_contexts.homedirs"))).To(Succeed())
+			valid, reason = selinux.SharedLabelsStillValid(s, oldRoot, root)
+			Expect(valid).To(BeFalse())
+			Expect(reason).To(ContainSubstring("file_contexts.homedirs' of the new system"))
+		})
+		It("are not valid if the SE Linux configuration changed", func() {
+			write(root, "/etc/selinux/config", "SELINUX=permissive\nSELINUXTYPE=targeted\n")
+			valid, reason := selinux.SharedLabelsStillValid(s, oldRoot, root)
+			Expect(valid).To(BeFalse())
+			Expect(reason).To(ContainSubstring("config' changed"))
+		})
+		It("are not valid while a relabel is pending on the running system", func() {
+			write(oldRoot, "/etc/selinux/.autorelabel", "")
+			valid, reason := selinux.SharedLabelsStillValid(s, oldRoot, root)
+			Expect(valid).To(BeFalse())
+			Expect(reason).To(ContainSubstring("pending"))
+		})
+		It("are not valid if the running system never completed a relabel", func() {
+			Expect(fs.Remove(filepath.Join(oldRoot, "/etc/selinux/.relabelled"))).To(Succeed())
+			valid, reason := selinux.SharedLabelsStillValid(s, oldRoot, root)
+			Expect(valid).To(BeFalse())
+			Expect(reason).To(ContainSubstring("no completed relabel"))
+		})
+		It("are not valid if there are no file contexts at all", func() {
+			Expect(fs.Remove(filepath.Join(oldRoot, contexts, "file_contexts"))).To(Succeed())
+			Expect(fs.Remove(filepath.Join(root, contexts, "file_contexts"))).To(Succeed())
+			valid, _ := selinux.SharedLabelsStillValid(s, oldRoot, root)
+			Expect(valid).To(BeFalse())
+
+			valid, _ = selinux.SharedLabelsStillValid(s, "/no/such/root", root)
+			Expect(valid).To(BeFalse())
+		})
+	})
 	It("does nothing if the context is not found in chroot", func() {
 		Expect(selinux.ChrootedSystemRelabel(
 			context.Background(), s, root, nil, nil),

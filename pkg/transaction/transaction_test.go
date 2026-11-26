@@ -386,6 +386,7 @@ func startInstallTransaction() *transaction.Transaction {
 
 	Expect(err).NotTo(HaveOccurred())
 	Expect(trans.ID).To(Equal(1))
+	Expect(trans.BasePath).To(BeEmpty())
 	Expect(len(trans.Merges)).To(Equal(0))
 	Expect(runner.MatchMilestones([][]string{
 		{"btrfs", "subvolume", "create"},
@@ -415,6 +416,7 @@ func startUpgradeTransaction() *transaction.Transaction {
 	trans, err := sn.Start()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(trans.ID).To(Equal(5))
+	Expect(trans.BasePath).To(Equal("/.snapshots/4/snapshot"))
 	Expect(len(trans.Merges)).To(Equal(2))
 	Expect(runner.MatchMilestones([][]string{
 		{"snapper", "--no-dbus", "--root", "/.snapshots/4/snapshot", "-c", "etc", "--jsonout", "list"},
