@@ -231,6 +231,9 @@ func (u Upgrader) Upgrade(d *deployment.Deployment) (err error) {
 		KernelCmdline:    kernelCmdline,
 		RecKernelCmdline: recKernelCmdline,
 		InitrdExtensions: initrdExts,
+		// The first transaction is an installation. Any later one upgrades an installed system, and the boot that
+		// follows it is the upgrade's own reboot.
+		SkipMenuOnce: trans.ID > 1,
 	})
 	if err != nil {
 		return fmt.Errorf("installing bootloader: %w", err)

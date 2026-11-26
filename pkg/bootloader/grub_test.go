@@ -291,6 +291,39 @@ var _ = Describe("Grub tests", Label("bootloader", "grub"), func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(string(entries)).To(Equal("entries=active 2 1 recovery"))
 	})
+	It("Starts the upgraded entry once without the boot menu wait when asked to", func() {
+		Expect(grub.Install(i)).To(Succeed())
+		Expect(runner.IncludesCmds([][]string{
+			{"grub2-editenv", "/target/dir/boot/grubenv", "set", "next_entry=active"},
+		})).NotTo(Succeed())
+
+		runner.ClearCmds()
+		i.EntryID = "2"
+		i.SkipMenuOnce = true
+		Expect(grub.Install(i)).To(Succeed())
+		Expect(runner.IncludesCmds([][]string{
+			{"grub2-editenv", "/target/dir/boot/grubenv", "set", "entries=active 2 1"},
+			{"grub2-editenv", "/target/dir/boot/grubenv", "set", "next_entry=active"},
+		})).To(Succeed())
+
+		// the boot loader configuration clears the variable in the block it reads it from
+		cfg, err := tfs.ReadFile("/target/dir/boot/EFI/ELEMENTAL/grub.cfg")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(string(cfg)).To(ContainSubstring("load_env --file (${root})/grubenv"))
+		Expect(string(cfg)).To(ContainSubstring("save_env --file (${root})/grubenv next_entry"))
+	})
+	It("Keeps an entry somebody chose for the next boot", func() {
+		Expect(grub.Install(i)).To(Succeed())
+		Expect(tfs.WriteFile("/target/dir/boot/grubenv", []byte("entries=active 1\nnext_entry=recovery"), vfs.FilePerm)).To(Succeed())
+
+		runner.ClearCmds()
+		i.EntryID = "2"
+		i.SkipMenuOnce = true
+		Expect(grub.Install(i)).To(Succeed())
+		for _, cmd := range runner.GetCmds() {
+			Expect(strings.Join(cmd, " ")).NotTo(ContainSubstring("next_entry"))
+		}
+	})
 	It("Prunes old snapshots", func() {
 		// "Install" older (6.6.99) kernel
 		Expect(vfs.MkdirAll(tfs, "/target/dir/boot/opensuse-tumbleweed/6.6.99-1-default", vfs.DirPerm)).To(Succeed())
