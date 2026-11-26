@@ -120,6 +120,19 @@ func (u Upgrader) Upgrade(d *deployment.Deployment) (err error) {
 	}
 
 	trans, err := u.t.Start()
+	// The transaction calls snapper with a root prefix on the snapshotted RW volumes, of the running system (the
+	// pre-transaction snapshot and the comparison for the merge) and of the new snapshot (the post-transaction
+	// snapshot at commit). Where SE Linux is enabled snapper then labels the snapshots subvolume of the volume by the
+	// prefixed path, i.e. as default_t, and the snapperd of that system is denied there from then on. Put the labels
+	// back when everything else is done: on the running system in any case, also after a failure, and on the new
+	// snapshot once it is committed. These are pushed first to run last, after a rollback too.
+	if trans != nil {
+		_, snapshottedVols := parsePersistentPaths(d)
+		cleanup.PushSuccessOnly(func() error { u.relabelSnapshots(trans.Path, snapshottedVols); return nil })
+		if trans.BasePath != "" {
+			cleanup.Push(func() error { u.relabelSnapshots(trans.BasePath, snapshottedVols); return nil })
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("starting transaction: %w", err)
 	}
@@ -266,6 +279,17 @@ func (u Upgrader) Upgrade(d *deployment.Deployment) (err error) {
 	}
 
 	return nil
+}
+
+// relabelSnapshots puts the SE Linux labels of the snapshots subvolumes of the snapshotted RW volumes of the given
+// root back to what the policy of that root assigns. A failure is logged and does not fail the upgrade: the
+// transaction is already committed, or already failed for another reason.
+func (u Upgrader) relabelSnapshots(root string, snapshotted []string) {
+	// The upgrade may have been cancelled: the labels are still put back.
+	err := selinux.ChrootedRelabelSnapshots(context.WithoutCancel(u.ctx), u.s, root, snapshotted)
+	if err != nil {
+		u.s.Logger().Warn("Could not label the snapshots subvolumes of '%s': %v", root, err)
+	}
 }
 
 func (u Upgrader) configHook(config string, root string) error {

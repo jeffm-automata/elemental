@@ -237,6 +237,61 @@ func ChrootedSystemRelabel(ctx context.Context, s *sys.System, rootDir string, s
 	return nil
 }
 
+// ChrootedRelabelSnapshots applies the SE Linux labels of the targeted policy found within the given root path
+// to the snapshots subvolumes snapper keeps: the one of each given snapshotted RW volume and, if the root is itself
+// a snapshot (<top>/.snapshots/<id>/snapshot), the one of the root, which is bound to /.snapshots for that. It runs
+// in a chroot of the root. The snapshots themselves are nested subvolumes: they are not crossed into and keep their
+// content as it is.
+//
+// It is for the end of whatever called snapper with a root prefix: snapper, when SE Linux is enabled where it
+// runs, labels the snapshots subvolume and every snapshot's info by the path it was given, prefix included, and
+// no file context matches such a path but the default one (default_t). A confined snapperd of the system that
+// owns the volume can then neither relabel the directory nor create in it.
+// Does nothing if the root has no targeted file contexts or there is no snapshots subvolume.
+func ChrootedRelabelSnapshots(ctx context.Context, s *sys.System, rootDir string, snapshotted []string) error {
+	rootSnapshots := filepath.Join("/", snapshotsDirName)
+	volumes := snapshotted
+	binds := map[string]string{}
+	// <top>/.snapshots/<id>/snapshot: the root's own snapshots are two levels up
+	top := filepath.Dir(filepath.Dir(filepath.Clean(rootDir)))
+	if filepath.Base(top) == snapshotsDirName && filepath.Base(filepath.Clean(rootDir)) == "snapshot" {
+		if ok, _ := vfs.IsDir(s.FS(), filepath.Join(rootDir, rootSnapshots)); ok {
+			binds[top] = rootSnapshots
+			volumes = slices.Concat([]string{"/"}, snapshotted)
+		}
+	}
+
+	callback := func() error {
+		if ok, _ := vfs.Exists(s.FS(), SelinuxTargetedContextFile); !ok {
+			s.Logger().Debug("Not relabelling snapshots subvolumes, no context found")
+			return nil
+		}
+		var dirs []string
+		for _, path := range volumes {
+			snapshotsDir := filepath.Join(path, snapshotsDirName)
+			if ok, _ := vfs.IsDir(s.FS(), snapshotsDir); ok {
+				dirs = append(dirs, snapshotsDir)
+			}
+		}
+		if len(dirs) == 0 {
+			return nil
+		}
+		stdOut := ring.New(debugLines)
+		stdErr := ring.New(debugLines)
+		s.Logger().Info("Applying SE Linux labels to the snapshots subvolumes that snapper keeps")
+		err := s.Runner().RunContextParseOutput(
+			ctx, stdHander(stdOut), stdHander(stdErr), "setfiles", slices.Concat([]string{"-i", SelinuxTargetedContextFile}, dirs)...,
+		)
+		logOutput(s, stdOut, stdErr)
+		return err
+	}
+	err := chroot.ChrootedCallback(s, rootDir, binds, callback, chroot.WithoutDefaultBinds())
+	if err != nil {
+		return fmt.Errorf("chrooted relabel of snapshots subvolumes: %w", err)
+	}
+	return nil
+}
+
 // RefreshPolicy recompiles the policy if its modules changed and otherwise regenerates
 // the installed policy from the linked policy and local customizations.
 func RefreshPolicy(ctx context.Context, s *sys.System, policyType string) error {

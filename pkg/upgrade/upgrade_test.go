@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -220,6 +221,69 @@ var _ = Describe("Upgrade", Label("upgrade"), func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err).To(MatchError("committing transaction: commit failed"))
 		Expect(t.RollbackCalled()).To(BeTrue())
+	})
+	Describe("labels of the snapshots subvolumes snapper relabelled by a prefixed path", func() {
+		const contextFile = "/etc/selinux/targeted/contexts/files/file_contexts"
+		// The chroot of the test does not change the root: both trees are labelled as "/".
+		relabels := func() [][]string {
+			var found [][]string
+			for _, cmd := range runner.GetCmds() {
+				if slices.Equal(cmd, []string{"setfiles", "-i", contextFile, "/etc/.snapshots"}) {
+					found = append(found, cmd)
+				}
+			}
+			return found
+		}
+		BeforeEach(func() {
+			Expect(vfs.MkdirAll(fs, filepath.Dir(contextFile), vfs.DirPerm)).To(Succeed())
+			Expect(fs.WriteFile(contextFile, []byte("contexts"), vfs.FilePerm)).To(Succeed())
+			Expect(vfs.MkdirAll(fs, "/etc/.snapshots/1", vfs.DirPerm)).To(Succeed())
+			trans.BasePath = "/old/snapshot"
+		})
+		It("are put back on the new snapshot and on the running system, after everything else", func() {
+			Expect(u.Upgrade(d)).To(Succeed())
+			Expect(relabels()).To(HaveLen(2))
+			Expect(syscall.WasChrootCalledWith("/old/snapshot")).To(BeTrue())
+			// each chroot ends with a sync: nothing but the two relabels closes the upgrade
+			cmds := runner.GetCmds()
+			relabel := relabels()[0]
+			Expect(cmds[len(cmds)-4:]).To(Equal([][]string{relabel, {"sync"}, relabel, {"sync"}}))
+		})
+		It("are put back on the new snapshot only, if the transaction has no previous system", func() {
+			trans.BasePath = ""
+			Expect(u.Upgrade(d)).To(Succeed())
+			Expect(relabels()).To(HaveLen(1))
+			Expect(syscall.WasChrootCalledWith("/old/snapshot")).To(BeFalse())
+		})
+		It("are put back on the running system only, if the upgrade fails", func() {
+			t.CommitErr = fmt.Errorf("commit failed")
+			Expect(u.Upgrade(d)).To(MatchError("committing transaction: commit failed"))
+			Expect(t.RollbackCalled()).To(BeTrue())
+			Expect(relabels()).To(HaveLen(1))
+			Expect(syscall.WasChrootCalledWith("/old/snapshot")).To(BeTrue())
+		})
+		It("are put back on the running system if the transaction fails to start after it took its snapshots", func() {
+			t.StartErr = fmt.Errorf("start failed")
+			Expect(u.Upgrade(d)).To(MatchError("starting transaction: start failed"))
+			Expect(relabels()).To(HaveLen(1))
+			Expect(syscall.WasChrootCalledWith("/old/snapshot")).To(BeTrue())
+		})
+		It("do not fail the upgrade if they cannot be put back", func() {
+			runner.SideEffect = func(cmd string, args ...string) ([]byte, error) {
+				if cmd == "setfiles" && slices.Equal(args, []string{"-i", contextFile, "/etc/.snapshots"}) {
+					return []byte{}, fmt.Errorf("setfiles failed")
+				}
+				return []byte{}, nil
+			}
+			Expect(u.Upgrade(d)).To(Succeed())
+			Expect(relabels()).To(HaveLen(2))
+		})
+		It("are left alone if no transaction was started", func() {
+			t.Trans = nil
+			t.StartErr = fmt.Errorf("start failed")
+			Expect(u.Upgrade(d)).To(MatchError("starting transaction: start failed"))
+			Expect(relabels()).To(BeEmpty())
+		})
 	})
 	Describe("relabel of shared paths at the next boot", func() {
 		const contexts = "/etc/selinux/targeted/contexts/files"

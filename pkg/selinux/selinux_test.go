@@ -336,6 +336,67 @@ var _ = Describe("Selinux", Label("selinux"), func() {
 			Expect(valid).To(BeFalse())
 		})
 	})
+	Describe("snapshots subvolumes", func() {
+		It("are relabelled in a chroot of the given root, each as a path of its own", func() {
+			Expect(fs.WriteFile(selinux.SelinuxTargetedContextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+			Expect(vfs.MkdirAll(fs, "/etc/.snapshots/2/snapshot", vfs.DirPerm)).To(Succeed())
+			Expect(vfs.MkdirAll(fs, "/home", vfs.DirPerm)).To(Succeed())
+			Expect(selinux.ChrootedRelabelSnapshots(context.Background(), s, root, []string{"/etc", "/home"})).To(Succeed())
+			Expect(syscall.WasChrootCalledWith(root)).To(BeTrue())
+			Expect(runner.GetCmds()).To(ContainElement(
+				[]string{"setfiles", "-i", "/etc/selinux/targeted/contexts/files/file_contexts", "/etc/.snapshots"},
+			))
+			Expect(runner.IncludesCmds([][]string{{"setfiles", "-i", "-F"}})).NotTo(Succeed())
+		})
+		It("include the one of the root, bound to /.snapshots, if the root is a snapshot", func() {
+			snapRoot := "/top/.snapshots/2/snapshot"
+			Expect(vfs.MkdirAll(fs, snapRoot+"/.snapshots", vfs.DirPerm)).To(Succeed())
+			Expect(fs.WriteFile(selinux.SelinuxTargetedContextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+			// the chroot of the test does not change the root
+			Expect(vfs.MkdirAll(fs, "/.snapshots", vfs.DirPerm)).To(Succeed())
+			Expect(vfs.MkdirAll(fs, "/etc/.snapshots", vfs.DirPerm)).To(Succeed())
+			Expect(selinux.ChrootedRelabelSnapshots(context.Background(), s, snapRoot, []string{"/etc"})).To(Succeed())
+			Expect(syscall.WasChrootCalledWith(snapRoot)).To(BeTrue())
+			Expect(runner.GetCmds()).To(ContainElement(
+				[]string{"setfiles", "-i", "/etc/selinux/targeted/contexts/files/file_contexts", "/.snapshots", "/etc/.snapshots"},
+			))
+			// bound for the relabel and released again
+			Expect(mounter.IsMountPoint(snapRoot + "/.snapshots")).To(BeFalse())
+		})
+		It("do not include the one of the root if the root is not a snapshot", func() {
+			Expect(fs.WriteFile(selinux.SelinuxTargetedContextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+			Expect(vfs.MkdirAll(fs, root+"/.snapshots", vfs.DirPerm)).To(Succeed())
+			Expect(vfs.MkdirAll(fs, "/.snapshots", vfs.DirPerm)).To(Succeed())
+			Expect(vfs.MkdirAll(fs, "/etc/.snapshots", vfs.DirPerm)).To(Succeed())
+			Expect(selinux.ChrootedRelabelSnapshots(context.Background(), s, root, []string{"/etc"})).To(Succeed())
+			Expect(runner.GetCmds()).To(ContainElement(
+				[]string{"setfiles", "-i", "/etc/selinux/targeted/contexts/files/file_contexts", "/etc/.snapshots"},
+			))
+		})
+		It("are left alone if no volume has one", func() {
+			Expect(fs.WriteFile(selinux.SelinuxTargetedContextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+			Expect(vfs.MkdirAll(fs, "/etc", vfs.DirPerm)).To(Succeed())
+			Expect(selinux.ChrootedRelabelSnapshots(context.Background(), s, root, []string{"/etc"})).To(Succeed())
+			Expect(runner.IncludesCmds([][]string{{"setfiles"}})).NotTo(Succeed())
+		})
+		It("are left alone if the root has no file contexts", func() {
+			Expect(vfs.MkdirAll(fs, "/etc/.snapshots", vfs.DirPerm)).To(Succeed())
+			Expect(selinux.ChrootedRelabelSnapshots(context.Background(), s, root, []string{"/etc"})).To(Succeed())
+			Expect(runner.IncludesCmds([][]string{{"setfiles"}})).NotTo(Succeed())
+		})
+		It("report a failing setfiles", func() {
+			Expect(fs.WriteFile(selinux.SelinuxTargetedContextFile, []byte{}, vfs.FilePerm)).To(Succeed())
+			Expect(vfs.MkdirAll(fs, "/etc/.snapshots", vfs.DirPerm)).To(Succeed())
+			runner.SideEffect = func(cmd string, args ...string) ([]byte, error) {
+				if cmd == "setfiles" {
+					return []byte{}, fmt.Errorf("setfiles failed")
+				}
+				return []byte{}, nil
+			}
+			Expect(selinux.ChrootedRelabelSnapshots(context.Background(), s, root, []string{"/etc"})).
+				To(MatchError(ContainSubstring("setfiles failed")))
+		})
+	})
 	It("does nothing if the context is not found in chroot", func() {
 		Expect(selinux.ChrootedSystemRelabel(
 			context.Background(), s, root, nil, nil),
